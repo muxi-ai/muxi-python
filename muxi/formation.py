@@ -89,8 +89,8 @@ class _FormationTransport:
     """HTTP transport for formation API (client/admin keys, SSE)."""
     def __init__(self, base_url: str, admin_key: Optional[str], client_key: Optional[str], timeout: int, max_retries: int, debug: bool, logger: Optional[logging.Logger]):
         self.base_url = base_url.rstrip("/")
-        self.admin_key = admin_key or ""
-        self.client_key = client_key or ""
+        self.admin_key = (admin_key or "").strip()
+        self.client_key = (client_key or "").strip()
         self.timeout = timeout or DEFAULT_TIMEOUT
         self.max_retries = max_retries or 0
         self.debug = debug or bool(os.getenv("MUXI_DEBUG"))
