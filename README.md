@@ -2,7 +2,7 @@
 
 Official Python SDK for [MUXI](https://muxi.org) - the infrastructure layer for AI agents.
 
-> Need deeper usage notes? See [USER_GUIDE.md](./USER_GUIDE.md) for streaming, retries, and auth details.
+> Need deeper usage notes? See the [User Guide](https://github.com/muxi-ai/muxi-python/blob/main/USER_GUIDE.md) for streaming, retries, and auth details.
 
 ## Installation
 
