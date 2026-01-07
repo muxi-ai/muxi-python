@@ -154,3 +154,37 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git merge origin/main --no-edit
           git push origin HEAD:develop
+
+  update_sdks_pointer:
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
+    needs: sync_develop
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout parent sdks repo
+        uses: actions/checkout@v4
+        with:
+          repository: muxi-ai/sdks
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.MUXI_RELEASE_TOKEN }}
+          path: sdks
+
+      - name: Update python submodule to latest main
+        run: |
+          cd sdks
+          git submodule update --init python
+          cd python
+          git fetch origin main
+          git checkout origin/main
+          cd ..
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add python
+          if git diff --cached --quiet; then
+            echo "No submodule pointer change"
+          else
+            git commit -m "Update python submodule after release v${{ needs.version.outputs.version }}"
+            git push origin main
+          fi

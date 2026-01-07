@@ -2,6 +2,8 @@
 
 Official Python SDK for [MUXI](https://muxi.org) - the infrastructure layer for AI agents.
 
+Includes sync/async clients, pooled httpx transport, and context managers for automatic cleanup.
+
 > Need deeper usage notes? See the [User Guide](https://github.com/muxi-ai/muxi-python/blob/main/USER_GUIDE.md) for streaming, retries, and auth details.
 
 ## Installation
