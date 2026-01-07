@@ -204,7 +204,9 @@ class _FormationTransport:
 
 
 class FormationClient:
-    def __init__(self, cfg: FormationConfig):
+    def __init__(self, cfg: FormationConfig | None = None, **kwargs):
+        if cfg is None:
+            cfg = FormationConfig(**kwargs)
         base_url = _build_base_url(cfg)
         self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger)
 
@@ -440,7 +442,9 @@ class FormationClient:
 
 
 class AsyncFormationClient:
-    def __init__(self, cfg: FormationConfig):
+    def __init__(self, cfg: FormationConfig | None = None, **kwargs):
+        if cfg is None:
+            cfg = FormationConfig(**kwargs)
         base_url = _build_base_url(cfg)
         self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger)
 

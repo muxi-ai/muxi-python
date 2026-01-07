@@ -13,21 +13,21 @@ pip install muxi-client
 ## Quick Start (sync)
 
 ```python
-from muxi import ServerClient, ServerConfig, FormationClient, FormationConfig
+from muxi import ServerClient, FormationClient
 
-server = ServerClient(ServerConfig(
+server = ServerClient(
     url="https://server.example.com",
     key_id="<key_id>",
     secret_key="<secret_key>",
-))
+)
 print(server.status())
 
-formation = FormationClient(FormationConfig(
+formation = FormationClient(
     server_url="https://server.example.com",
     formation_id="<formation_id>",
     client_key="<client_key>",
     admin_key="<admin_key>",
-))
+)
 print(formation.health())
 ```
 
@@ -35,22 +35,22 @@ print(formation.health())
 
 ```python
 import asyncio
-from muxi import AsyncServerClient, ServerConfig, AsyncFormationClient, FormationConfig
+from muxi import AsyncServerClient, AsyncFormationClient
 
 async def main():
-    server = AsyncServerClient(ServerConfig(
+    server = AsyncServerClient(
         url="https://server.example.com",
         key_id="<key_id>",
         secret_key="<secret_key>",
-    ))
+    )
     print(await server.status())
 
-    formation = AsyncFormationClient(FormationConfig(
+    formation = AsyncFormationClient(
         server_url="https://server.example.com",
         formation_id="<formation_id>",
         client_key="<client_key>",
         admin_key="<admin_key>",
-    ))
+    )
     async for evt in await formation.chat_stream({"message": "hi"}):
         print(evt)
         break

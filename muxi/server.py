@@ -20,7 +20,9 @@ class ServerConfig:
 
 
 class ServerClient:
-    def __init__(self, cfg: ServerConfig):
+    def __init__(self, cfg: ServerConfig | None = None, **kwargs):
+        if cfg is None:
+            cfg = ServerConfig(**kwargs)
         self.transport = Transport(
             TransportConfig(
                 base_url=cfg.url,
@@ -119,7 +121,9 @@ class ServerClient:
 
 
 class AsyncServerClient:
-    def __init__(self, cfg: ServerConfig):
+    def __init__(self, cfg: ServerConfig | None = None, **kwargs):
+        if cfg is None:
+            cfg = ServerConfig(**kwargs)
         self._transport = Transport(
             TransportConfig(
                 base_url=cfg.url,
