@@ -178,8 +178,8 @@ jobs:
           git config submodule.python.url https://github.com/muxi-ai/muxi-python.git
           git submodule update --init --depth 1 python
           cd python
-          git fetch origin main
-          git checkout origin/main
+          git fetch origin main --depth 1
+          git checkout -B main origin/main
           cd ..
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
