@@ -61,8 +61,8 @@ class Transport:
     """Shared HTTP client for server API (sync and async)."""
     def __init__(self, cfg: TransportConfig):
         self.base_url = cfg.base_url.rstrip("/")
-        self.key_id = cfg.key_id
-        self.secret_key = cfg.secret_key
+        self.key_id = (cfg.key_id or "").strip()
+        self.secret_key = (cfg.secret_key or "").strip()
         self.timeout = cfg.timeout or DEFAULT_TIMEOUT
         self.max_retries = cfg.max_retries or 0
         self.debug = cfg.debug or bool(os.getenv("MUXI_DEBUG"))
