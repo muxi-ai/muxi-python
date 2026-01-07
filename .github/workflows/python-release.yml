@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    if: false
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +52,7 @@ jobs:
           python -m unittest discover tests -v
 
   version:
-    if: false
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -101,7 +101,7 @@ jobs:
           fi
 
   release:
-    if: false
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     needs: version
     permissions:
@@ -134,7 +134,7 @@ jobs:
             Python SDK v${{ needs.version.outputs.version }}
 
   sync_develop:
-    if: false
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
     needs: release
     runs-on: ubuntu-latest
     permissions:
@@ -156,7 +156,7 @@ jobs:
 
   update_sdks_pointer:
     if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
-    needs: []
+    needs: sync_develop
     runs-on: ubuntu-latest
     permissions:
       contents: write
