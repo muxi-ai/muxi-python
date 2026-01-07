@@ -1,3 +1,5 @@
+"""Formation (runtime) client interfaces and SSE helpers."""
+
 from __future__ import annotations
 
 import json
@@ -20,6 +22,7 @@ DEFAULT_TIMEOUT = 30
 
 @dataclass
 class FormationConfig:
+    """Configuration for formation (runtime) calls."""
     formation_id: str | None = None
     url: str | None = None
     server_url: str | None = None
@@ -43,6 +46,7 @@ def _build_base_url(cfg: FormationConfig) -> str:
 
 
 def _parse_sse_lines(lines: Iterable[str]):
+    """Parse SSE lines into event dicts (sync iterator)."""
     event: Optional[str] = None
     data_parts: list[str] = []
     for raw in lines:
@@ -62,6 +66,7 @@ def _parse_sse_lines(lines: Iterable[str]):
 
 
 async def _parse_sse_lines_async(lines) -> AsyncGenerator[Dict[str, Any], None]:
+    """Async variant of SSE parser over an async line iterator."""
     event: Optional[str] = None
     data_parts: list[str] = []
     async for raw in lines:
@@ -81,6 +86,7 @@ async def _parse_sse_lines_async(lines) -> AsyncGenerator[Dict[str, Any], None]:
 
 
 class _FormationTransport:
+    """HTTP transport for formation API (client/admin keys, SSE)."""
     def __init__(self, base_url: str, admin_key: Optional[str], client_key: Optional[str], timeout: int, max_retries: int, debug: bool, logger: Optional[logging.Logger]):
         self.base_url = base_url.rstrip("/")
         self.admin_key = admin_key or ""
@@ -274,6 +280,7 @@ class _FormationTransport:
 
 
 class FormationClient:
+    """Sync client for formation/runtime APIs."""
     def __init__(self, cfg: FormationConfig | None = None, **kwargs):
         if cfg is None:
             cfg = FormationConfig(**kwargs)
@@ -522,6 +529,7 @@ class FormationClient:
 
 
 class AsyncFormationClient:
+    """Async client for formation/runtime APIs."""
     def __init__(self, cfg: FormationConfig | None = None, **kwargs):
         if cfg is None:
             cfg = FormationConfig(**kwargs)

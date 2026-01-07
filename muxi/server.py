@@ -1,3 +1,5 @@
+"""Server (control-plane) client interfaces."""
+
 from __future__ import annotations
 
 import logging
@@ -10,6 +12,7 @@ from .formation import _parse_sse_lines, _parse_sse_lines_async
 
 @dataclass
 class ServerConfig:
+    """Configuration for server control-plane calls."""
     url: str
     key_id: str
     secret_key: str
@@ -20,6 +23,7 @@ class ServerConfig:
 
 
 class ServerClient:
+    """Sync client for server control-plane APIs."""
     def __init__(self, cfg: ServerConfig | None = None, **kwargs):
         if cfg is None:
             cfg = ServerConfig(**kwargs)
@@ -137,6 +141,7 @@ class ServerClient:
 
 
 class AsyncServerClient:
+    """Async client for server control-plane APIs."""
     def __init__(self, cfg: ServerConfig | None = None, **kwargs):
         if cfg is None:
             cfg = ServerConfig(**kwargs)

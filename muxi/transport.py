@@ -1,3 +1,9 @@
+"""HTTP transport helpers shared by server and formation clients.
+
+Uses httpx for pooled sync/async clients, injects standard headers, idempotency keys,
+and wraps responses with retry/backoff and envelope unwrapping.
+"""
+
 from __future__ import annotations
 
 import json
@@ -20,6 +26,7 @@ DEFAULT_TIMEOUT = 30
 
 
 def _unwrap_envelope(obj: Any) -> Any:
+    """Flatten server envelope while preserving request_id/timestamp when present."""
     if not isinstance(obj, dict):
         return obj
     if "data" not in obj:
@@ -40,6 +47,7 @@ def _unwrap_envelope(obj: Any) -> Any:
 
 @dataclass
 class TransportConfig:
+    """Connection settings for the server transport."""
     base_url: str
     key_id: str
     secret_key: str
@@ -50,6 +58,7 @@ class TransportConfig:
 
 
 class Transport:
+    """Shared HTTP client for server API (sync and async)."""
     def __init__(self, cfg: TransportConfig):
         self.base_url = cfg.base_url.rstrip("/")
         self.key_id = cfg.key_id
@@ -58,6 +67,7 @@ class Transport:
         self.max_retries = cfg.max_retries or 0
         self.debug = cfg.debug or bool(os.getenv("MUXI_DEBUG"))
         self.logger = cfg.logger or logging.getLogger("muxi")
+        # Keep a small, pooled client per process; callers close via context manager.
         self._client = httpx.Client(http2=False, timeout=self.timeout)
         self._aclient = httpx.AsyncClient(http2=False, timeout=self.timeout)
 
@@ -68,6 +78,7 @@ class Transport:
         await self._aclient.aclose()
 
     def _headers(self, method: str, path: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        """Build base headers including auth, sdk metadata, and idempotency."""
         headers = {
             "Authorization": build_auth_header(self.key_id, self.secret_key, method, path),
             "Content-Type": "application/json",
@@ -80,6 +91,7 @@ class Transport:
         return headers
 
     def _url_and_path(self, path: str, params: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+        """Return absolute URL and path-with-query for signing/logging."""
         rel = path if path.startswith("/") else f"/{path}"
         query = httpx.QueryParams({k: v for k, v in (params or {}).items() if v is not None})
         full_path = f"{rel}?{query}" if query else rel
@@ -93,6 +105,7 @@ class Transport:
         return status in (429, 500, 502, 503, 504)
 
     def request_json(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None) -> Any:
+        """Sync JSON request with retry/backoff and envelope unwrapping."""
         url, full_path = self._url_and_path(path, params)
         headers = self._headers(method, full_path)
         attempt = 0
@@ -146,6 +159,7 @@ class Transport:
                 raise ConnectionError("CONNECTION_ERROR", str(req_err), 0)
 
     def stream_lines(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None) -> Iterable[str]:
+        """Sync line stream (SSE) with infinite timeout."""
         url, full_path = self._url_and_path(path, params)
         headers = self._headers(method, full_path, {"Accept": "text/event-stream"})
         resp = self._client.stream(method, url, headers=headers, json=body, timeout=None)
@@ -160,6 +174,7 @@ class Transport:
         return gen()
 
     async def arequest_json(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None) -> Any:
+        """Async JSON request with retry/backoff and envelope unwrapping."""
         url, full_path = self._url_and_path(path, params)
         headers = self._headers(method, full_path)
         attempt = 0
@@ -213,6 +228,7 @@ class Transport:
                 raise ConnectionError("CONNECTION_ERROR", str(req_err), 0)
 
     async def astream_lines(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None):
+        """Async line stream (SSE) with infinite timeout."""
         url, full_path = self._url_and_path(path, params)
         headers = self._headers(method, full_path, {"Accept": "text/event-stream"})
         stream = self._aclient.stream(method, url, headers=headers, json=body, timeout=None)
