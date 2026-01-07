@@ -247,16 +247,16 @@ class FormationClient:
 
     # Chat (client key)
     def chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/chat", body=payload, use_admin=False, user_id=user_id)
+        return self._transport.request_json("POST", "/rpc/chat", body=payload, use_admin=False, user_id=user_id)
 
     def chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("POST", "/chat/stream", body=payload, use_admin=False, user_id=user_id)
+        return self._transport.stream_sse("POST", "/rpc/chat/stream", body=payload, use_admin=False, user_id=user_id)
 
     def audio_chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/chat/audio", body=payload, use_admin=False, user_id=user_id)
+        return self._transport.request_json("POST", "/rpc/chat/audio", body=payload, use_admin=False, user_id=user_id)
 
     def audio_chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("POST", "/chat/audio/stream", body=payload, use_admin=False, user_id=user_id)
+        return self._transport.stream_sse("POST", "/rpc/chat/audio/stream", body=payload, use_admin=False, user_id=user_id)
 
     # Sessions / requests
     def get_sessions(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
@@ -475,16 +475,16 @@ class AsyncFormationClient:
         await self._transport.arequest_json("DELETE", f"/secrets/{key}", use_admin=True)
 
     async def chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/chat", body=payload, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json("POST", "/rpc/chat", body=payload, use_admin=False, user_id=user_id)
 
     async def chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("POST", "/chat/stream", body=payload, use_admin=False, user_id=user_id)
+        return await self._transport.astream_sse("POST", "/rpc/chat/stream", body=payload, use_admin=False, user_id=user_id)
 
     async def audio_chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/chat/audio", body=payload, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json("POST", "/rpc/chat/audio", body=payload, use_admin=False, user_id=user_id)
 
     async def audio_chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("POST", "/chat/audio/stream", body=payload, use_admin=False, user_id=user_id)
+        return await self._transport.astream_sse("POST", "/rpc/chat/audio/stream", body=payload, use_admin=False, user_id=user_id)
 
     async def get_sessions(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
