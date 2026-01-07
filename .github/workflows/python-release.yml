@@ -178,7 +178,7 @@ jobs:
           git submodule update --init --depth 1 python
           cd python
           git fetch origin main --depth 1
-          git reset --hard origin/main
+          git reset --hard FETCH_HEAD
           cd ..
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
