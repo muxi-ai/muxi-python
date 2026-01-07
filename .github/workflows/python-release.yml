@@ -45,15 +45,80 @@ jobs:
           : "${MUXI_SDK_E2E_ADMIN_KEY:?set MUXI_SDK_E2E_ADMIN_KEY}"
           python -m unittest discover tests -v
 
-  release:
+  version:
     runs-on: ubuntu-latest
     needs: test
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.MUXI_RELEASE_TOKEN }}
+
+      - name: Compute next version (ScalVer)
+        id: version
+        run: |
+          current=$(python - <<'PY'
+from pathlib import Path
+import re
+text = Path('muxi/version.py').read_text()
+m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
+if not m:
+    raise SystemExit("version not found")
+print(m.group(1))
+PY
+          )
+          major=$(echo "$current" | cut -d. -f1)
+          cdate=$(echo "$current" | cut -d. -f2)
+          cpatch=$(echo "$current" | cut -d. -f3)
+          today=$(date -u +%Y%m%d)
+          if [ "$cdate" = "$today" ]; then
+            nextpatch=$((cpatch + 1))
+          else
+            nextpatch=0
+          fi
+          next="${major}.${today}.${nextpatch}"
+          python - <<'PY'
+from pathlib import Path
+import re
+import os
+next_version = os.environ['next']
+path = Path('muxi/version.py')
+text = path.read_text()
+text = re.sub(r'__version__\s*=\s*["\']([^"\']+)["\']', f"__version__ = \"{next_version}\"", text)
+path.write_text(text)
+PY
+          echo "version=$next" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add muxi/version.py
+          git commit -m "chore: release v${{ steps.version.outputs.version }}"
+          git push origin HEAD:main
+
+      - name: Create tag
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG exists"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+  release:
+    runs-on: ubuntu-latest
+    needs: version
     permissions:
       contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: v${{ needs.version.outputs.version }}
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -67,3 +132,11 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          body: |
+            Python SDK v${{ needs.version.outputs.version }}
