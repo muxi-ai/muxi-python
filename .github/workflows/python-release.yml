@@ -15,8 +15,7 @@ concurrency:
 
 jobs:
   test:
-    # Temporarily disabled while stabilizing the release flow
-    if: ${{ false }}
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +53,7 @@ jobs:
 
   version:
     if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -133,3 +133,24 @@ jobs:
           name: v${{ needs.version.outputs.version }}
           body: |
             Python SDK v${{ needs.version.outputs.version }}
+
+  sync_develop:
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          token: ${{ secrets.MUXI_RELEASE_TOKEN }}
+
+      - name: Merge main into develop
+        run: |
+          git fetch origin main develop
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git merge origin/main --no-edit
+          git push origin HEAD:develop
