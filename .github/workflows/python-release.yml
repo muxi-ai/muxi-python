@@ -72,7 +72,7 @@ jobs:
             nextpatch=0
           fi
           next="${major}.${today}.${nextpatch}"
-          python -c "from pathlib import Path; import re, os; next_version=os.environ['next']; path=Path('muxi/version.py'); text=path.read_text(); text=re.sub(r'__version__\\s*=\\s*[\"\']([^\"\']+)[\"\']', f'__version__ = \"{next_version}\"', text); path.write_text(text)"
+          python -c "from pathlib import Path; import re; next_version='${next}'; path=Path('muxi/version.py'); text=path.read_text(); text=re.sub(r'__version__\\s*=\\s*[\"\']([^\"\']+)[\"\']', f'__version__ = \"{next_version}\"', text); path.write_text(text)"
           echo "version=$next" >> $GITHUB_OUTPUT
 
       - name: Commit version bump
