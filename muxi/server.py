@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, Generator, Optional
 
 from .transport import Transport, TransportConfig
-from .formation import _parse_sse_lines
+from .formation import _parse_sse_lines, _parse_sse_lines_async
 
 
 @dataclass
@@ -34,6 +34,22 @@ class ServerClient:
                 logger=cfg.logger,
             )
         )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.transport.close()
+        except Exception:
+            pass
+        return False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
     # Unauthenticated
     def ping(self) -> int:
@@ -136,6 +152,22 @@ class AsyncServerClient:
             )
         )
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            await self._transport.aclose()
+        except Exception:
+            pass
+        return False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
     async def ping(self) -> int:
         resp = await self._transport.arequest_json("GET", "/ping")
         return len(resp) if resp else 0
@@ -186,27 +218,27 @@ class AsyncServerClient:
 
     async def deploy_formation_stream(self, formation_id: str, payload: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/deploy/stream", body=payload)
-        return _parse_sse_lines(lines)
+        return _parse_sse_lines_async(lines)
 
     async def update_formation_stream(self, formation_id: str, payload: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/update/stream", body=payload)
-        return _parse_sse_lines(lines)
+        return _parse_sse_lines_async(lines)
 
     async def start_formation_stream(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
         lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/start/stream", body={})
-        return _parse_sse_lines(lines)
+        return _parse_sse_lines_async(lines)
 
     async def restart_formation_stream(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
         lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/restart/stream", body={})
-        return _parse_sse_lines(lines)
+        return _parse_sse_lines_async(lines)
 
     async def rollback_formation_stream(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
         lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/rollback/stream", body={})
-        return _parse_sse_lines(lines)
+        return _parse_sse_lines_async(lines)
 
     async def stream_formation_logs(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
         lines = await self._transport.astream_lines("GET", f"/rpc/formations/{formation_id}/logs/stream")
-        return _parse_sse_lines(lines)
+        return _parse_sse_lines_async(lines)
 
     async def _rpc_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", path, params=params)

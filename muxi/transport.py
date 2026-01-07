@@ -7,8 +7,9 @@ import platform
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Generator, Iterable, Optional, Tuple
-from urllib import parse, request, error
+from typing import Any, Dict, Iterable, Optional, Tuple
+
+import httpx
 
 from .auth import build_auth_header
 from .errors import ConnectionError, map_error
@@ -57,6 +58,14 @@ class Transport:
         self.max_retries = cfg.max_retries or 0
         self.debug = cfg.debug or bool(os.getenv("MUXI_DEBUG"))
         self.logger = cfg.logger or logging.getLogger("muxi")
+        self._client = httpx.Client(http2=False, timeout=self.timeout)
+        self._aclient = httpx.AsyncClient(http2=False, timeout=self.timeout)
+
+    def close(self) -> None:
+        self._client.close()
+
+    async def aclose(self) -> None:
+        await self._aclient.aclose()
 
     def _headers(self, method: str, path: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         headers = {
@@ -72,7 +81,7 @@ class Transport:
 
     def _url_and_path(self, path: str, params: Optional[Dict[str, Any]]) -> Tuple[str, str]:
         rel = path if path.startswith("/") else f"/{path}"
-        query = parse.urlencode({k: v for k, v in (params or {}).items() if v is not None})
+        query = httpx.QueryParams({k: v for k, v in (params or {}).items() if v is not None})
         full_path = f"{rel}?{query}" if query else rel
         return f"{self.base_url}{full_path}", full_path
 
@@ -80,101 +89,144 @@ class Transport:
         if self.debug and self.logger:
             self.logger.debug(msg)
 
+    def _should_retry(self, status: int) -> bool:
+        return status in (429, 500, 502, 503, 504)
+
     def request_json(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None) -> Any:
         url, full_path = self._url_and_path(path, params)
-        data = None
-        if body is not None:
-            data = json.dumps(body).encode()
-
         headers = self._headers(method, full_path)
         attempt = 0
         backoff = 0.5
         while True:
-            req = request.Request(url, data=data, method=method, headers=headers)
             start = time.time()
             try:
-                with request.urlopen(req, timeout=self.timeout) as resp:
-                    elapsed = time.time() - start
-                    self._log(f"{method} {url} -> {resp.status} ({elapsed:.3f}s)")
-                    content = resp.read()
-                    if not content:
-                        return None
+                resp = self._client.request(
+                    method,
+                    url,
+                    headers=headers,
+                    json=body,
+                    timeout=self.timeout,
+                )
+                elapsed = time.time() - start
+                self._log(f"{method} {url} -> {resp.status_code} ({elapsed:.3f}s)")
+                if resp.status_code >= 400:
+                    retry_after = int(resp.headers.get("Retry-After", "0") or 0)
+                    payload = None
                     try:
-                        parsed = json.loads(content)
-                        return _unwrap_envelope(parsed)
-                    except json.JSONDecodeError:
-                        return content.decode(errors="ignore")
-            except error.HTTPError as http_err:
-                status = http_err.code
-                retry_after = int(http_err.headers.get("Retry-After", "0") or 0)
-                err_body = http_err.read() or b""
+                        payload = resp.json()
+                    except Exception:
+                        payload = None
+                    code = (payload or {}).get("code") or (payload or {}).get("error") or "ERROR"
+                    message = (payload or {}).get("message") or resp.reason_phrase
+                    err_obj = map_error(resp.status_code, code, message, payload if isinstance(payload, dict) else None, retry_after)
+                    if self._should_retry(resp.status_code) and attempt < self.max_retries:
+                        sleep_for = min(backoff, 30)
+                        self._log(f"retrying {method} {url} after {sleep_for}s due to {resp.status_code}")
+                        time.sleep(sleep_for)
+                        backoff *= 2
+                        attempt += 1
+                        continue
+                    raise err_obj
+
+                if not resp.content:
+                    return None
                 try:
-                    payload = json.loads(err_body) if err_body else {}
-                except json.JSONDecodeError:
-                    payload = {}
-                code = payload.get("code") or payload.get("error") or "ERROR"
-                message = payload.get("message") or http_err.reason or ""
-                err_obj = map_error(status, code, message, payload if isinstance(payload, dict) else None, retry_after)
-                if status in (429, 500, 502, 503, 504) and attempt < self.max_retries:
-                    sleep_for = min(backoff, 30)
-                    self._log(f"retrying {method} {url} after {sleep_for}s due to {status}")
-                    time.sleep(sleep_for)
-                    backoff *= 2
-                    attempt += 1
-                    continue
-                raise err_obj
-            except error.URLError as url_err:
+                    parsed = resp.json()
+                    return _unwrap_envelope(parsed)
+                except Exception:
+                    return resp.text
+            except httpx.RequestError as req_err:
                 if attempt < self.max_retries:
                     sleep_for = min(backoff, 30)
-                    self._log(f"retrying {method} {url} after {sleep_for}s due to connection error: {url_err.reason}")
+                    self._log(f"retrying {method} {url} after {sleep_for}s due to connection error: {req_err}")
                     time.sleep(sleep_for)
                     backoff *= 2
                     attempt += 1
                     continue
-                raise ConnectionError("CONNECTION_ERROR", str(url_err.reason), 0)
+                raise ConnectionError("CONNECTION_ERROR", str(req_err), 0)
 
     def stream_lines(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None) -> Iterable[str]:
         url, full_path = self._url_and_path(path, params)
-        data = None
-        if body is not None:
-            data = json.dumps(body).encode()
         headers = self._headers(method, full_path, {"Accept": "text/event-stream"})
+        resp = self._client.stream(method, url, headers=headers, json=body, timeout=None)
 
-        req = request.Request(url, data=data, method=method, headers=headers)
-        resp = request.urlopen(req, timeout=None)
-        def gen() -> Generator[str, None, None]:
-            try:
-                for raw in resp:
-                    yield raw.decode(errors="ignore")
-            finally:
-                resp.close()
+        def gen():
+            with resp as r:
+                for line in r.iter_lines():
+                    if line is None:
+                        continue
+                    yield line
+
         return gen()
 
     async def arequest_json(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None) -> Any:
-        import asyncio
+        url, full_path = self._url_and_path(path, params)
+        headers = self._headers(method, full_path)
+        attempt = 0
+        backoff = 0.5
+        while True:
+            start = time.time()
+            try:
+                resp = await self._aclient.request(
+                    method,
+                    url,
+                    headers=headers,
+                    json=body,
+                    timeout=self.timeout,
+                )
+                elapsed = time.time() - start
+                self._log(f"{method} {url} -> {resp.status_code} ({elapsed:.3f}s)")
+                if resp.status_code >= 400:
+                    retry_after = int(resp.headers.get("Retry-After", "0") or 0)
+                    payload = None
+                    try:
+                        payload = resp.json()
+                    except Exception:
+                        payload = None
+                    code = (payload or {}).get("code") or (payload or {}).get("error") or "ERROR"
+                    message = (payload or {}).get("message") or resp.reason_phrase
+                    err_obj = map_error(resp.status_code, code, message, payload if isinstance(payload, dict) else None, retry_after)
+                    if self._should_retry(resp.status_code) and attempt < self.max_retries:
+                        sleep_for = min(backoff, 30)
+                        self._log(f"retrying {method} {url} after {sleep_for}s due to {resp.status_code}")
+                        await self._sleep(sleep_for)
+                        backoff *= 2
+                        attempt += 1
+                        continue
+                    raise err_obj
 
-        return await asyncio.to_thread(self.request_json, method, path, params=params, body=body)
+                if not resp.content:
+                    return None
+                try:
+                    parsed = resp.json()
+                    return _unwrap_envelope(parsed)
+                except Exception:
+                    return resp.text
+            except httpx.RequestError as req_err:
+                if attempt < self.max_retries:
+                    sleep_for = min(backoff, 30)
+                    self._log(f"retrying {method} {url} after {sleep_for}s due to connection error: {req_err}")
+                    await self._sleep(sleep_for)
+                    backoff *= 2
+                    attempt += 1
+                    continue
+                raise ConnectionError("CONNECTION_ERROR", str(req_err), 0)
 
     async def astream_lines(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None):
-        import asyncio
-
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
-
-        def run_stream():
-            try:
-                for line in self.stream_lines(method, path, params=params, body=body):
-                    loop.call_soon_threadsafe(queue.put_nowait, line)
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, None)
-
-        await asyncio.to_thread(run_stream)
+        url, full_path = self._url_and_path(path, params)
+        headers = self._headers(method, full_path, {"Accept": "text/event-stream"})
+        stream = self._aclient.stream(method, url, headers=headers, json=body, timeout=None)
 
         async def agen():
-            while True:
-                line = await queue.get()
-                if line is None:
-                    break
-                yield line
+            async with stream as r:
+                async for line in r.aiter_lines():
+                    if line is None:
+                        continue
+                    yield line
 
         return agen()
+
+    async def _sleep(self, seconds: float) -> None:
+        import asyncio
+
+        await asyncio.sleep(seconds)

@@ -24,7 +24,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: OS Independent",
 ]
-dependencies = []
+dependencies = ["httpx>=0.24.0"]
 
 [project.urls]
 Homepage = "https://muxi.org"
