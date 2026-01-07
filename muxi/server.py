@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Generator, Optional
 
 from .transport import Transport, TransportConfig
+from .formation import _parse_sse_lines
 
 
 @dataclass
@@ -50,11 +51,8 @@ class ServerClient:
     def get_formation(self, formation_id: str) -> Dict[str, Any]:
         return self._rpc_get(f"/rpc/formations/{formation_id}")
 
-    def deploy_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._rpc_post(f"/rpc/formations/{formation_id}/deploy", payload)
-
-    def update_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._rpc_post(f"/rpc/formations/{formation_id}/update", payload)
+    def stop_formation(self, formation_id: str) -> Dict[str, Any]:
+        return self._rpc_post(f"/rpc/formations/{formation_id}/stop", {})
 
     def start_formation(self, formation_id: str) -> Dict[str, Any]:
         return self._rpc_post(f"/rpc/formations/{formation_id}/start", {})
@@ -65,18 +63,50 @@ class ServerClient:
     def rollback_formation(self, formation_id: str) -> Dict[str, Any]:
         return self._rpc_post(f"/rpc/formations/{formation_id}/rollback", {})
 
-    def stop_formation(self, formation_id: str) -> Dict[str, Any]:
-        return self._rpc_post(f"/rpc/formations/{formation_id}/stop", {})
-
     def delete_formation(self, formation_id: str) -> Dict[str, Any]:
         return self._rpc_delete(f"/rpc/formations/{formation_id}")
 
     def cancel_update(self, formation_id: str) -> Dict[str, Any]:
         return self._rpc_post(f"/rpc/formations/{formation_id}/cancel-update", {})
 
+    def deploy_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._rpc_post(f"/rpc/formations/{formation_id}/deploy", payload)
+
+    def update_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._rpc_post(f"/rpc/formations/{formation_id}/update", payload)
+
+    def get_formation_logs(self, formation_id: str, *, limit: Optional[int] = None) -> Dict[str, Any]:
+        params = {"limit": limit} if limit is not None else None
+        return self._rpc_get(f"/rpc/formations/{formation_id}/logs", params=params)
+
     def get_server_logs(self, *, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"limit": limit} if limit is not None else None
         return self._rpc_get("/rpc/server/logs", params=params)
+
+    # Streaming (SSE)
+    def deploy_formation_stream(self, formation_id: str, payload: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
+        lines = self.transport.stream_lines("POST", f"/rpc/formations/{formation_id}/deploy/stream", body=payload)
+        return _parse_sse_lines(lines)
+
+    def update_formation_stream(self, formation_id: str, payload: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
+        lines = self.transport.stream_lines("POST", f"/rpc/formations/{formation_id}/update/stream", body=payload)
+        return _parse_sse_lines(lines)
+
+    def start_formation_stream(self, formation_id: str) -> Generator[Dict[str, Any], None, None]:
+        lines = self.transport.stream_lines("POST", f"/rpc/formations/{formation_id}/start/stream", body={})
+        return _parse_sse_lines(lines)
+
+    def restart_formation_stream(self, formation_id: str) -> Generator[Dict[str, Any], None, None]:
+        lines = self.transport.stream_lines("POST", f"/rpc/formations/{formation_id}/restart/stream", body={})
+        return _parse_sse_lines(lines)
+
+    def rollback_formation_stream(self, formation_id: str) -> Generator[Dict[str, Any], None, None]:
+        lines = self.transport.stream_lines("POST", f"/rpc/formations/{formation_id}/rollback/stream", body={})
+        return _parse_sse_lines(lines)
+
+    def stream_formation_logs(self, formation_id: str) -> Generator[Dict[str, Any], None, None]:
+        lines = self.transport.stream_lines("GET", f"/rpc/formations/{formation_id}/logs/stream")
+        return _parse_sse_lines(lines)
 
     def _rpc_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.transport.request_json("GET", path, params=params)
@@ -90,7 +120,6 @@ class ServerClient:
 
 class AsyncServerClient:
     def __init__(self, cfg: ServerConfig):
-        self._cfg = cfg
         self._transport = Transport(
             TransportConfig(
                 base_url=cfg.url,
@@ -119,11 +148,8 @@ class AsyncServerClient:
     async def get_formation(self, formation_id: str) -> Dict[str, Any]:
         return await self._rpc_get(f"/rpc/formations/{formation_id}")
 
-    async def deploy_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return await self._rpc_post(f"/rpc/formations/{formation_id}/deploy", payload)
-
-    async def update_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return await self._rpc_post(f"/rpc/formations/{formation_id}/update", payload)
+    async def stop_formation(self, formation_id: str) -> Dict[str, Any]:
+        return await self._rpc_post(f"/rpc/formations/{formation_id}/stop", {})
 
     async def start_formation(self, formation_id: str) -> Dict[str, Any]:
         return await self._rpc_post(f"/rpc/formations/{formation_id}/start", {})
@@ -134,18 +160,49 @@ class AsyncServerClient:
     async def rollback_formation(self, formation_id: str) -> Dict[str, Any]:
         return await self._rpc_post(f"/rpc/formations/{formation_id}/rollback", {})
 
-    async def stop_formation(self, formation_id: str) -> Dict[str, Any]:
-        return await self._rpc_post(f"/rpc/formations/{formation_id}/stop", {})
-
     async def delete_formation(self, formation_id: str) -> Dict[str, Any]:
         return await self._rpc_delete(f"/rpc/formations/{formation_id}")
 
     async def cancel_update(self, formation_id: str) -> Dict[str, Any]:
         return await self._rpc_post(f"/rpc/formations/{formation_id}/cancel-update", {})
 
+    async def deploy_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._rpc_post(f"/rpc/formations/{formation_id}/deploy", payload)
+
+    async def update_formation(self, formation_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._rpc_post(f"/rpc/formations/{formation_id}/update", payload)
+
+    async def get_formation_logs(self, formation_id: str, *, limit: Optional[int] = None) -> Dict[str, Any]:
+        params = {"limit": limit} if limit is not None else None
+        return await self._rpc_get(f"/rpc/formations/{formation_id}/logs", params=params)
+
     async def get_server_logs(self, *, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"limit": limit} if limit is not None else None
         return await self._rpc_get("/rpc/server/logs", params=params)
+
+    async def deploy_formation_stream(self, formation_id: str, payload: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/deploy/stream", body=payload)
+        return _parse_sse_lines(lines)
+
+    async def update_formation_stream(self, formation_id: str, payload: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/update/stream", body=payload)
+        return _parse_sse_lines(lines)
+
+    async def start_formation_stream(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/start/stream", body={})
+        return _parse_sse_lines(lines)
+
+    async def restart_formation_stream(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/restart/stream", body={})
+        return _parse_sse_lines(lines)
+
+    async def rollback_formation_stream(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        lines = await self._transport.astream_lines("POST", f"/rpc/formations/{formation_id}/rollback/stream", body={})
+        return _parse_sse_lines(lines)
+
+    async def stream_formation_logs(self, formation_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        lines = await self._transport.astream_lines("GET", f"/rpc/formations/{formation_id}/logs/stream")
+        return _parse_sse_lines(lines)
 
     async def _rpc_get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", path, params=params)
