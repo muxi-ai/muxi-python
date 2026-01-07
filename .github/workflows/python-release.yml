@@ -174,7 +174,8 @@ jobs:
       - name: Update python submodule to latest main
         run: |
           cd sdks
-          git submodule update --init python
+          git config submodule.python.url https://github.com/muxi-ai/muxi-python.git
+          git submodule update --init --depth 1 python
           cd python
           git fetch origin main
           git checkout origin/main
