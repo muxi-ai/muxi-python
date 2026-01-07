@@ -1,8 +1,12 @@
 # MUXI Python SDK
 
-Official Python SDK for [MUXI](https://muxi.org) - the infrastructure layer for AI agents.
+Official Python SDK for [MUXI](https://muxi.org) — infrastructure for AI agents.
 
-Includes sync/async clients, pooled httpx transport, and context managers for automatic cleanup.
+**Highlights**
+- Sync & async clients with pooled `httpx` transport
+- Context managers for automatic client cleanup
+- Built-in retries, idempotency, and typed errors
+- Streaming helpers for chat/audio and deploy/log tails
 
 > Need deeper usage notes? See the [User Guide](https://github.com/muxi-ai/muxi-python/blob/main/USER_GUIDE.md) for streaming, retries, and auth details.
 
@@ -60,12 +64,12 @@ async def main():
 asyncio.run(main())
 ```
 
-## Formation Base URL override
+## Formation base URL override
 
 - Default (via server proxy): `server_url + /api/{formation_id}/v1`
 - Direct formation: set `base_url="http://localhost:9012/v1"` (or use `url` for dev mode `http://localhost:8001/v1`)
 
-## Auth & Headers
+## Auth & headers
 
 - Server: HMAC with `key_id`/`secret_key` on `/rpc/*`.
 - Formation: `X-MUXI-CLIENT-KEY` or `X-MUXI-ADMIN-KEY` on formation API.
@@ -77,7 +81,7 @@ asyncio.run(main())
 - Chat/audio: POST `/chat` or `/audiochat` with `stream=True`; consume SSE events.
 - Deploy/log streams: methods return generators/async generators.
 
-## Errors, Retries, Timeouts
+## Errors, retries, timeouts
 
 - Typed errors for auth/validation/rate-limit/server/connection.
 - Default timeout 30s (streaming is unbounded); retries on 429/5xx/connection with backoff.
