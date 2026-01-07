@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="muxi-client",
-    version="0.1.0",
+    version="0.20260106.1",
     description="MUXI Client (Python SDK)",
     author="Ran Aroussi",
     author_email="ran@aroussi.com",
