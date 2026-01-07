@@ -45,8 +45,9 @@ class AsyncIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(config, dict)
 
     async def test_chat_stream(self):
+        payload = {"message": "hi"}
         try:
-            stream = await self.formation.chat_stream({"messages": [{"role": "user", "content": "hi"}]})
+            stream = await self.formation.chat_stream(payload)
         except Exception as exc:
             self.skipTest(f"chat stream unavailable: {exc}")
             return

@@ -255,12 +255,12 @@ class FormationClient:
         return self._transport.stream_sse("POST", "/chat", body=body, use_admin=False, user_id=user_id)
 
     def audio_chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/chat/audio", body=payload, use_admin=False, user_id=user_id)
+        return self._transport.request_json("POST", "/audiochat", body=payload, use_admin=False, user_id=user_id)
 
     def audio_chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> Generator[Dict[str, Any], None, None]:
         body = dict(payload)
         body["stream"] = True
-        return self._transport.stream_sse("POST", "/chat/audio", body=body, use_admin=False, user_id=user_id)
+        return self._transport.stream_sse("POST", "/audiochat", body=body, use_admin=False, user_id=user_id)
 
     # Sessions / requests
     def get_sessions(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
@@ -487,12 +487,12 @@ class AsyncFormationClient:
         return await self._transport.astream_sse("POST", "/chat", body=body, use_admin=False, user_id=user_id)
 
     async def audio_chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/chat/audio", body=payload, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json("POST", "/audiochat", body=payload, use_admin=False, user_id=user_id)
 
     async def audio_chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> AsyncGenerator[Dict[str, Any], None]:
         body = dict(payload)
         body["stream"] = True
-        return await self._transport.astream_sse("POST", "/chat/audio", body=body, use_admin=False, user_id=user_id)
+        return await self._transport.astream_sse("POST", "/audiochat", body=body, use_admin=False, user_id=user_id)
 
     async def get_sessions(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
