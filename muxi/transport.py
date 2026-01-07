@@ -80,7 +80,10 @@ class Transport:
                     content = resp.read()
                     if not content:
                         return None
-                    return json.loads(content)
+                    try:
+                        return json.loads(content)
+                    except json.JSONDecodeError:
+                        return content.decode(errors="ignore")
             except error.HTTPError as http_err:
                 status = http_err.code
                 retry_after = int(http_err.headers.get("Retry-After", "0") or 0)
