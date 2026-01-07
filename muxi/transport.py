@@ -18,6 +18,25 @@ from .version import __version__
 DEFAULT_TIMEOUT = 30
 
 
+def _unwrap_envelope(obj: Any) -> Any:
+    if not isinstance(obj, dict):
+        return obj
+    if "data" not in obj:
+        return obj
+    req = obj.get("request") or {}
+    request_id = req.get("id") or obj.get("request_id")
+    ts = obj.get("timestamp")
+    data = obj.get("data")
+    if isinstance(data, dict):
+        out = dict(data)
+        if request_id:
+            out.setdefault("request_id", request_id)
+        if ts is not None:
+            out.setdefault("timestamp", ts)
+        return out
+    return data if data is not None else obj
+
+
 @dataclass
 class TransportConfig:
     base_url: str
@@ -81,7 +100,8 @@ class Transport:
                     if not content:
                         return None
                     try:
-                        return json.loads(content)
+                        parsed = json.loads(content)
+                        return _unwrap_envelope(parsed)
                     except json.JSONDecodeError:
                         return content.decode(errors="ignore")
             except error.HTTPError as http_err:

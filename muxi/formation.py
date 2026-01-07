@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Dict, Generator, Iterable, Optional
 from urllib import parse, request, error
 
 from .errors import ConnectionError, map_error
+from .transport import _unwrap_envelope
 from .version import __version__
 
 
@@ -122,7 +123,11 @@ class _FormationTransport:
                     payload = resp.read()
                     if not payload:
                         return None
-                    return json.loads(payload)
+                    try:
+                        parsed = json.loads(payload)
+                        return _unwrap_envelope(parsed)
+                    except json.JSONDecodeError:
+                        return payload.decode(errors="ignore")
             except error.HTTPError as http_err:
                 status = http_err.code
                 retry_after = int(http_err.headers.get("Retry-After", "0") or 0)
