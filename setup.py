@@ -33,7 +33,11 @@ authors = project.get("authors", [])
 author = authors[0].get("name", "MUXI Team") if authors else "MUXI Team"
 author_email = authors[0].get("email", "dev@muxi.org") if authors else "dev@muxi.org"
 install_requires = project.get("dependencies", [])
-extras_require = project.get("optional-dependencies", {}) if "optional-dependencies" in project else {}
+extras_require = (
+    project.get("optional-dependencies", {})
+    if "optional-dependencies" in project
+    else {}
+)
 python_requires = project.get("requires-python", ">=3.10")
 classifiers = project.get("classifiers", [])
 urls = project.get("urls", {})
@@ -65,4 +69,3 @@ setup(
     extras_require=extras_require,
     zip_safe=False,
 )
-
