@@ -62,14 +62,19 @@ jobs:
         id: version
         run: |
           current=$(python - <<'PY'
-            from pathlib import Path
-            import re
-            text = Path('muxi/version.py').read_text()
-            m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
-            if not m:
-                raise SystemExit("version not found")
-            print(m.group(1))
-          PY
+from textwrap import dedent
+from pathlib import Path
+import re
+exec(dedent('''
+from pathlib import Path
+import re
+text = Path('muxi/version.py').read_text()
+m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
+if not m:
+    raise SystemExit("version not found")
+print(m.group(1))
+'''))
+PY
           )
           major=$(echo "$current" | cut -d. -f1)
           cdate=$(echo "$current" | cut -d. -f2)
@@ -82,15 +87,18 @@ jobs:
           fi
           next="${major}.${today}.${nextpatch}"
           python - <<'PY'
-            from pathlib import Path
-            import re
-            import os
-            next_version = os.environ['next']
-            path = Path('muxi/version.py')
-            text = path.read_text()
-            text = re.sub(r'__version__\s*=\s*["\']([^"\']+)["\']', f"__version__ = \"{next_version}\"", text)
-            path.write_text(text)
-          PY
+from textwrap import dedent
+import os
+exec(dedent('''
+from pathlib import Path
+import re
+next_version = os.environ['next']
+path = Path('muxi/version.py')
+text = path.read_text()
+text = re.sub(r'__version__\s*=\s*["\']([^"\']+)["\']', f"__version__ = \"{next_version}\"", text)
+path.write_text(text)
+'''))
+PY
           echo "version=$next" >> $GITHUB_OUTPUT
 
       - name: Commit version bump
