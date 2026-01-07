@@ -57,7 +57,7 @@ asyncio.run(main())
 ## Auth & Headers
 
 - Server: HMAC with `key_id`/`secret_key` on `/rpc` endpoints.
-- Formation: `X-MUXI-CLIENT-KEY` or `X-MUXI-ADMIN-KEY` on `/api/{formation}/v1`.
+- Formation: `X-MUXI-CLIENT-KEY` or `X-MUXI-ADMIN-KEY` on `/api/{formation}/v1` (default); override `base_url` for direct access (e.g., `http://localhost:9012/v1`).
 - Idempotency: `X-Muxi-Idempotency-Key` auto-generated on every request.
 - SDK: `X-Muxi-SDK`, `X-Muxi-Client` headers set automatically.
 
