@@ -3,6 +3,7 @@
 from .version import __version__
 from .server import ServerClient, ServerConfig, AsyncServerClient
 from .formation import FormationClient, FormationConfig, AsyncFormationClient
+from . import webhook
 
 __all__ = [
     "__version__",
@@ -12,4 +13,5 @@ __all__ = [
     "FormationClient",
     "FormationConfig",
     "AsyncFormationClient",
+    "webhook",
 ]

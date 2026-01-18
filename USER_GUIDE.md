@@ -81,6 +81,57 @@ asyncio.run(main())
 
 - Endpoints using `limit`/`has_more` return the raw response; pass `limit` as needed.
 
+## Webhook Verification
+
+For async operations, MUXI delivers results via webhooks. The SDK provides helpers to verify signatures and parse payloads.
+
+```python
+from muxi import webhook
+
+@app.post("/webhooks/muxi")
+async def handle_webhook(request: Request):
+    payload = await request.body()
+    signature = request.headers.get("X-Muxi-Signature")
+
+    # Verify signature (returns False if invalid)
+    if not webhook.verify_signature(payload, signature, WEBHOOK_SECRET):
+        raise HTTPException(401, "Invalid signature")
+
+    # Parse into typed object
+    event = webhook.parse(payload)
+
+    if event.status == "completed":
+        for item in event.content:
+            if item.type == "text":
+                print(item.text)
+    elif event.status == "failed":
+        print(f"Error: {event.error.message}")
+    elif event.status == "awaiting_clarification":
+        print(f"Question: {event.clarification.question}")
+
+    return {"status": "received"}
+```
+
+### Webhook Functions
+
+| Function | Description |
+|----------|-------------|
+| `webhook.verify_signature(payload, signature, secret, tolerance=300)` | Verify HMAC-SHA256 signature and timestamp |
+| `webhook.parse(payload)` | Parse payload into `WebhookEvent` object |
+
+### WebhookEvent Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `request_id` | str | Original request ID |
+| `status` | str | "completed", "failed", or "awaiting_clarification" |
+| `timestamp` | int | Unix timestamp |
+| `content` | List[ContentItem] | Response content items |
+| `error` | ErrorDetails | Error info (if failed) |
+| `clarification` | Clarification | Clarification details (if awaiting) |
+| `processing_time` | float | Processing duration in seconds |
+| `raw` | dict | Original payload for custom access |
+
 ## Examples
 
 - See `examples/server_status.py` and `examples/formation_health.py` for minimal usage.
