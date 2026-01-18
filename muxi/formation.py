@@ -334,7 +334,7 @@ class FormationClient:
         return self._transport.request_json("GET", f"/secrets/{key}", use_admin=True)
 
     def set_secret(self, key: str, value: str) -> None:
-        self._transport.request_json("POST", f"/secrets/{key}", body={"value": value}, use_admin=True)
+        self._transport.request_json("PUT", f"/secrets/{key}", body={"value": value}, use_admin=True)
 
     def delete_secret(self, key: str) -> None:
         self._transport.request_json("DELETE", f"/secrets/{key}", use_admin=True)
@@ -385,35 +385,32 @@ class FormationClient:
 
     def get_memories(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
-        return self._transport.request_json("GET", "/memory/user", params=params, use_admin=False)
+        return self._transport.request_json("GET", "/memories", params=params, use_admin=False, user_id=user_id)
 
     def add_memory(self, user_id: str, mem_type: str, detail: str) -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/memory", body={"user_id": user_id, "type": mem_type, "detail": detail}, use_admin=False)
+        return self._transport.request_json("POST", "/memories", body={"user_id": user_id, "type": mem_type, "detail": detail}, use_admin=False, user_id=user_id)
 
     def delete_memory(self, user_id: str, memory_id: str) -> None:
-        self._transport.request_json("DELETE", f"/memory/{memory_id}?user_id={parse.quote(user_id)}", use_admin=False)
+        self._transport.request_json("DELETE", f"/memories/{memory_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     def get_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/memory/buffer/{user_id}", use_admin=False)
+        return self._transport.request_json("GET", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     def clear_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("DELETE", f"/memory/buffer/{user_id}", use_admin=False)
+        return self._transport.request_json("DELETE", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     def clear_session_buffer(self, user_id: str, session_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("DELETE", f"/memory/buffer/{user_id}/{session_id}", use_admin=False)
+        return self._transport.request_json("DELETE", f"/memory/buffer/{session_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     def clear_all_buffers(self) -> Dict[str, Any]:
         return self._transport.request_json("DELETE", "/memory/buffer", use_admin=True)
-
-    def get_memory_buffers(self) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/memory/buffers", use_admin=True)
 
     def get_buffer_stats(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/memory/stats", use_admin=True)
 
     # Scheduler
     def get_scheduler_config(self) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/scheduler/config", use_admin=True)
+        return self._transport.request_json("GET", "/scheduler", use_admin=True)
 
     def get_scheduler_jobs(self, user_id: str) -> Dict[str, Any]:
         params = {"user_id": user_id}
@@ -432,15 +429,6 @@ class FormationClient:
     # Async / logging / a2a
     def get_async_config(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/async", use_admin=True)
-
-    def get_async_jobs(self) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/async/jobs", use_admin=True)
-
-    def get_async_job(self, job_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/async/jobs/{job_id}", use_admin=True)
-
-    def cancel_async_job(self, job_id: str) -> None:
-        self._transport.request_json("DELETE", f"/async/jobs/{job_id}", use_admin=True)
 
     def get_a2a_config(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/a2a", use_admin=True)
@@ -467,11 +455,8 @@ class FormationClient:
     def delete_credential(self, credential_id: str, user_id: str) -> Dict[str, Any]:
         return self._transport.request_json("DELETE", f"/credentials/{credential_id}", use_admin=False, user_id=user_id)
 
-    def get_user_identifiers(self) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/users/identifiers", use_admin=True)
-
     def get_user_identifiers_for_user(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/users/{user_id}/identifiers", use_admin=True)
+        return self._transport.request_json("GET", f"/users/identifiers/{user_id}", use_admin=True)
 
     def link_user_identifier(self, muxi_user_id: str, identifiers: list[Any]) -> Dict[str, Any]:
         return self._transport.request_json("POST", "/users/identifiers", body={"muxi_user_id": muxi_user_id, "identifiers": identifiers}, use_admin=True)
@@ -514,18 +499,17 @@ class FormationClient:
 
     # Events / logs streaming
     def stream_events(self, user_id: str) -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("GET", f"/events/{user_id}", use_admin=False)
+        return self._transport.stream_sse("GET", "/events", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     def stream_request(self, user_id: str, session_id: str, request_id: str) -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("GET", f"/requests/{request_id}/stream?user_id={parse.quote(user_id)}&session_id={parse.quote(session_id)}", use_admin=False)
+        return self._transport.stream_sse("GET", f"/events/{session_id}/{request_id}", use_admin=False, user_id=user_id)
 
     def stream_logs(self, filters: Optional[Dict[str, Any]] = None) -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("POST", "/logs/stream", body=filters or {}, use_admin=True)
+        return self._transport.stream_sse("GET", "/logs", params=filters, use_admin=True)
 
     # Resolve user
     def resolve_user(self, identifier: str, create_user: bool = False) -> Dict[str, Any]:
-        params = {"identifier": identifier, "create_user": str(create_user).lower()}
-        return self._transport.request_json("GET", "/users/resolve", params=params, use_admin=False)
+        return self._transport.request_json("POST", "/users/resolve", body={"identifier": identifier, "create_user": create_user}, use_admin=False)
 
 
 class AsyncFormationClient:
@@ -580,7 +564,7 @@ class AsyncFormationClient:
         return await self._transport.arequest_json("GET", f"/secrets/{key}", use_admin=True)
 
     async def set_secret(self, key: str, value: str) -> None:
-        await self._transport.arequest_json("POST", f"/secrets/{key}", body={"value": value}, use_admin=True)
+        await self._transport.arequest_json("PUT", f"/secrets/{key}", body={"value": value}, use_admin=True)
 
     async def delete_secret(self, key: str) -> None:
         await self._transport.arequest_json("DELETE", f"/secrets/{key}", use_admin=True)
@@ -628,34 +612,31 @@ class AsyncFormationClient:
 
     async def get_memories(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
-        return await self._transport.arequest_json("GET", "/memory/user", params=params, use_admin=False)
+        return await self._transport.arequest_json("GET", "/memories", params=params, use_admin=False, user_id=user_id)
 
     async def add_memory(self, user_id: str, mem_type: str, detail: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/memory", body={"user_id": user_id, "type": mem_type, "detail": detail}, use_admin=False)
+        return await self._transport.arequest_json("POST", "/memories", body={"user_id": user_id, "type": mem_type, "detail": detail}, use_admin=False, user_id=user_id)
 
     async def delete_memory(self, user_id: str, memory_id: str) -> None:
-        await self._transport.arequest_json("DELETE", f"/memory/{memory_id}?user_id={parse.quote(user_id)}", use_admin=False)
+        await self._transport.arequest_json("DELETE", f"/memories/{memory_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     async def get_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/memory/buffer/{user_id}", use_admin=False)
+        return await self._transport.arequest_json("GET", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     async def clear_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("DELETE", f"/memory/buffer/{user_id}", use_admin=False)
+        return await self._transport.arequest_json("DELETE", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     async def clear_session_buffer(self, user_id: str, session_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("DELETE", f"/memory/buffer/{user_id}/{session_id}", use_admin=False)
+        return await self._transport.arequest_json("DELETE", f"/memory/buffer/{session_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     async def clear_all_buffers(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("DELETE", "/memory/buffer", use_admin=True)
-
-    async def get_memory_buffers(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/memory/buffers", use_admin=True)
 
     async def get_buffer_stats(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/memory/stats", use_admin=True)
 
     async def get_scheduler_config(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/scheduler/config", use_admin=True)
+        return await self._transport.arequest_json("GET", "/scheduler", use_admin=True)
 
     async def get_scheduler_jobs(self, user_id: str) -> Dict[str, Any]:
         params = {"user_id": user_id}
@@ -673,15 +654,6 @@ class AsyncFormationClient:
 
     async def get_async_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/async", use_admin=True)
-
-    async def get_async_jobs(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/async/jobs", use_admin=True)
-
-    async def get_async_job(self, job_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/async/jobs/{job_id}", use_admin=True)
-
-    async def cancel_async_job(self, job_id: str) -> None:
-        await self._transport.arequest_json("DELETE", f"/async/jobs/{job_id}", use_admin=True)
 
     async def get_a2a_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/a2a", use_admin=True)
@@ -707,11 +679,8 @@ class AsyncFormationClient:
     async def delete_credential(self, credential_id: str, user_id: str) -> Dict[str, Any]:
         return await self._transport.arequest_json("DELETE", f"/credentials/{credential_id}", use_admin=False, user_id=user_id)
 
-    async def get_user_identifiers(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/users/identifiers", use_admin=True)
-
     async def get_user_identifiers_for_user(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/users/{user_id}/identifiers", use_admin=True)
+        return await self._transport.arequest_json("GET", f"/users/identifiers/{user_id}", use_admin=True)
 
     async def link_user_identifier(self, muxi_user_id: str, identifiers: list[Any]) -> Dict[str, Any]:
         return await self._transport.arequest_json("POST", "/users/identifiers", body={"muxi_user_id": muxi_user_id, "identifiers": identifiers}, use_admin=True)
@@ -751,14 +720,13 @@ class AsyncFormationClient:
         await self._transport.arequest_json("DELETE", "/audit?confirm=clear-audit-log", use_admin=True)
 
     async def stream_events(self, user_id: str) -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("GET", f"/events/{user_id}", use_admin=False)
+        return await self._transport.astream_sse("GET", "/events", params={"user_id": user_id}, use_admin=False, user_id=user_id)
 
     async def stream_request(self, user_id: str, session_id: str, request_id: str) -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("GET", f"/requests/{request_id}/stream?user_id={parse.quote(user_id)}&session_id={parse.quote(session_id)}", use_admin=False)
+        return await self._transport.astream_sse("GET", f"/events/{session_id}/{request_id}", use_admin=False, user_id=user_id)
 
     async def stream_logs(self, filters: Optional[Dict[str, Any]] = None) -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("POST", "/logs/stream", body=filters or {}, use_admin=True)
+        return await self._transport.astream_sse("GET", "/logs", params=filters, use_admin=True)
 
     async def resolve_user(self, identifier: str, create_user: bool = False) -> Dict[str, Any]:
-        params = {"identifier": identifier, "create_user": str(create_user).lower()}
-        return await self._transport.arequest_json("GET", "/users/resolve", params=params, use_admin=False)
+        return await self._transport.arequest_json("POST", "/users/resolve", body={"identifier": identifier, "create_user": create_user}, use_admin=False)
