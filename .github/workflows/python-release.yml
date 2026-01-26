@@ -151,7 +151,7 @@ jobs:
           git fetch origin main develop
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git merge origin/main --no-edit
+          git merge origin/main --no-edit -m "chore: sync main to develop [skip ci]"
           git push origin HEAD:develop
 
   update_sdks_pointer:
