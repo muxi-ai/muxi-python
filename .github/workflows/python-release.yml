@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      MUXI_SDK_E2E_SERVER_URL: ${{ secrets.MUXI_SDK_E2E_SERVER_URL }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
         with:
@@ -35,21 +37,14 @@ jobs:
         run: python -m unittest discover tests -v
 
       - name: Integration tests
+        if: ${{ env.MUXI_SDK_E2E_SERVER_URL != '' }}
         env:
-          MUXI_SDK_E2E_SERVER_URL: ${{ secrets.MUXI_SDK_E2E_SERVER_URL }}
           MUXI_SDK_E2E_KEY_ID: ${{ secrets.MUXI_SDK_E2E_KEY_ID }}
           MUXI_SDK_E2E_SECRET_KEY: ${{ secrets.MUXI_SDK_E2E_SECRET_KEY }}
           MUXI_SDK_E2E_FORMATION_ID: ${{ secrets.MUXI_SDK_E2E_FORMATION_ID }}
           MUXI_SDK_E2E_CLIENT_KEY: ${{ secrets.MUXI_SDK_E2E_CLIENT_KEY }}
           MUXI_SDK_E2E_ADMIN_KEY: ${{ secrets.MUXI_SDK_E2E_ADMIN_KEY }}
-        run: |
-          : "${MUXI_SDK_E2E_SERVER_URL:?set MUXI_SDK_E2E_SERVER_URL}"
-          : "${MUXI_SDK_E2E_KEY_ID:?set MUXI_SDK_E2E_KEY_ID}"
-          : "${MUXI_SDK_E2E_SECRET_KEY:?set MUXI_SDK_E2E_SECRET_KEY}"
-          : "${MUXI_SDK_E2E_FORMATION_ID:?set MUXI_SDK_E2E_FORMATION_ID}"
-          : "${MUXI_SDK_E2E_CLIENT_KEY:?set MUXI_SDK_E2E_CLIENT_KEY}"
-          : "${MUXI_SDK_E2E_ADMIN_KEY:?set MUXI_SDK_E2E_ADMIN_KEY}"
-          python -m unittest discover tests -v
+        run: python -m unittest discover tests -v
 
   version:
     if: "${{ !startsWith(github.event.head_commit.message, 'chore: release') }}"
