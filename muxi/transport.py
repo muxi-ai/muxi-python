@@ -20,6 +20,7 @@ import httpx
 from .auth import build_auth_header
 from .errors import ConnectionError, map_error
 from .version import __version__
+from .version_check import check_for_updates
 
 
 DEFAULT_TIMEOUT = 30
@@ -55,6 +56,7 @@ class TransportConfig:
     max_retries: int = 0
     debug: bool = False
     logger: Optional[logging.Logger] = None
+    _app: str = None  # Internal: for Console telemetry
 
 
 class Transport:
@@ -67,6 +69,7 @@ class Transport:
         self.max_retries = cfg.max_retries or 0
         self.debug = cfg.debug or bool(os.getenv("MUXI_DEBUG"))
         self.logger = cfg.logger or logging.getLogger("muxi")
+        self.app = cfg._app
         # Keep a small, pooled client per process; callers close via context manager.
         self._client = httpx.Client(http2=False, timeout=self.timeout)
         self._aclient = httpx.AsyncClient(http2=False, timeout=self.timeout)
@@ -86,6 +89,8 @@ class Transport:
             "X-Muxi-Client": f"{platform.system().lower()}-{platform.machine().lower()}/py{platform.python_version()}",
             "X-Muxi-Idempotency-Key": str(uuid.uuid4()),
         }
+        if self.app:
+            headers["X-Muxi-App"] = self.app
         if extra:
             headers.update(extra)
         return headers
@@ -122,6 +127,10 @@ class Transport:
                 )
                 elapsed = time.time() - start
                 self._log(f"{method} {url} -> {resp.status_code} ({elapsed:.3f}s)")
+
+                # Check for SDK updates (non-blocking, once per process)
+                check_for_updates(dict(resp.headers))
+
                 if resp.status_code >= 400:
                     retry_after = int(resp.headers.get("Retry-After", "0") or 0)
                     payload = None
@@ -191,6 +200,10 @@ class Transport:
                 )
                 elapsed = time.time() - start
                 self._log(f"{method} {url} -> {resp.status_code} ({elapsed:.3f}s)")
+
+                # Check for SDK updates (non-blocking, once per process)
+                check_for_updates(dict(resp.headers))
+
                 if resp.status_code >= 400:
                     retry_after = int(resp.headers.get("Retry-After", "0") or 0)
                     payload = None

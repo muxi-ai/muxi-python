@@ -20,6 +20,7 @@ class ServerConfig:
     timeout: int = 30
     debug: bool = False
     logger: Optional[logging.Logger] = None
+    _app: str = None  # Internal: for Console telemetry
 
 
 class ServerClient:
@@ -36,6 +37,7 @@ class ServerClient:
                 max_retries=cfg.max_retries,
                 debug=cfg.debug,
                 logger=cfg.logger,
+                _app=cfg._app,
             )
         )
 
@@ -154,6 +156,7 @@ class AsyncServerClient:
                 max_retries=cfg.max_retries,
                 debug=cfg.debug,
                 logger=cfg.logger,
+                _app=cfg._app,
             )
         )
 

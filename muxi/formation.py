@@ -15,6 +15,7 @@ from urllib import parse
 from .errors import ConnectionError, map_error
 from .transport import _unwrap_envelope
 from .version import __version__
+from .version_check import check_for_updates
 
 
 DEFAULT_TIMEOUT = 30
@@ -33,6 +34,7 @@ class FormationConfig:
     timeout: int = DEFAULT_TIMEOUT
     debug: bool = False
     logger: Optional[logging.Logger] = None
+    _app: str | None = None  # Internal: for Console telemetry
 
 
 def _build_base_url(cfg: FormationConfig) -> str:
@@ -87,7 +89,7 @@ async def _parse_sse_lines_async(lines) -> AsyncGenerator[Dict[str, Any], None]:
 
 class _FormationTransport:
     """HTTP transport for formation API (client/admin keys, SSE)."""
-    def __init__(self, base_url: str, admin_key: Optional[str], client_key: Optional[str], timeout: int, max_retries: int, debug: bool, logger: Optional[logging.Logger]):
+    def __init__(self, base_url: str, admin_key: Optional[str], client_key: Optional[str], timeout: int, max_retries: int, debug: bool, logger: Optional[logging.Logger], app: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.admin_key = (admin_key or "").strip()
         self.client_key = (client_key or "").strip()
@@ -95,6 +97,7 @@ class _FormationTransport:
         self.max_retries = max_retries or 0
         self.debug = debug or bool(os.getenv("MUXI_DEBUG"))
         self.logger = logger or logging.getLogger("muxi")
+        self.app = app
         self._client = httpx.Client(http2=False, timeout=self.timeout)
         self._aclient = httpx.AsyncClient(http2=False, timeout=self.timeout)
 
@@ -110,6 +113,8 @@ class _FormationTransport:
             "X-Muxi-Client": f"python/{__version__}",
             "X-Muxi-Idempotency-Key": str(uuid.uuid4()),
         }
+        if self.app:
+            headers["X-Muxi-App"] = self.app
         if use_admin:
             if not self.admin_key:
                 raise ValueError("admin key required")
@@ -157,6 +162,9 @@ class _FormationTransport:
                 )
                 elapsed = time.time() - start
                 self._log(f"{method} {full_path} -> {resp.status_code} ({elapsed:.3f}s)")
+
+                # Check for SDK updates (non-blocking, once per process)
+                check_for_updates(dict(resp.headers))
 
                 if resp.status_code >= 400:
                     retry_after = int(resp.headers.get("Retry-After", "0") or 0)
@@ -225,6 +233,9 @@ class _FormationTransport:
                 elapsed = time.time() - start
                 self._log(f"{method} {full_path} -> {resp.status_code} ({elapsed:.3f}s)")
 
+                # Check for SDK updates (non-blocking, once per process)
+                check_for_updates(dict(resp.headers))
+
                 if resp.status_code >= 400:
                     retry_after = int(resp.headers.get("Retry-After", "0") or 0)
                     payload = None
@@ -285,7 +296,7 @@ class FormationClient:
         if cfg is None:
             cfg = FormationConfig(**kwargs)
         base_url = _build_base_url(cfg)
-        self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger)
+        self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger, cfg._app)
 
     def __enter__(self):
         return self
@@ -518,7 +529,7 @@ class AsyncFormationClient:
         if cfg is None:
             cfg = FormationConfig(**kwargs)
         base_url = _build_base_url(cfg)
-        self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger)
+        self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger, cfg._app)
 
     async def __aenter__(self):
         return self
