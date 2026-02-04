@@ -15,9 +15,9 @@ TWELVE_HOURS = timedelta(hours=12)
 _has_checked_version = False
 
 
-def _is_dev_mode() -> bool:
-    """Check if running in development mode."""
-    return bool(os.environ.get("MUXI_DEBUG"))
+def _notifications_disabled() -> bool:
+    """Check if version notifications are disabled."""
+    return os.environ.get("MUXI_SDK_VERSION_NOTIFICATION") == "0"
 
 
 def _load_cache() -> Dict[str, Any]:
@@ -102,7 +102,7 @@ def check_for_updates(headers: Dict[str, str]) -> None:
     _has_checked_version = True
     
     # Dev mode only
-    if not _is_dev_mode():
+    if _notifications_disabled():
         return
     
     # Get header (case-insensitive)
