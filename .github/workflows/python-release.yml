@@ -109,7 +109,20 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
+      - name: Check if version exists on PyPI
+        id: check_pypi
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if curl -sf "https://pypi.org/pypi/muxi/${VERSION}/json" > /dev/null 2>&1; then
+            echo "Version ${VERSION} already exists on PyPI, skipping publish"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version ${VERSION} not found on PyPI, will publish"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish to PyPI
+        if: steps.check_pypi.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
 
       - name: Commit version bump
