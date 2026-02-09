@@ -34,6 +34,7 @@ class FormationConfig:
     timeout: int = DEFAULT_TIMEOUT
     debug: bool = False
     logger: Optional[logging.Logger] = None
+    mode: str = "live"  # "live" (default) or "draft" for local dev
     _app: str | None = None  # Internal: for Console telemetry
 
 
@@ -43,7 +44,8 @@ def _build_base_url(cfg: FormationConfig) -> str:
     if cfg.url:
         return cfg.url.rstrip("/") + "/v1"
     if cfg.server_url and cfg.formation_id:
-        return f"{cfg.server_url.rstrip('/')}/api/{cfg.formation_id}/v1"
+        prefix = "draft" if cfg.mode == "draft" else "api"
+        return f"{cfg.server_url.rstrip('/')}/{prefix}/{cfg.formation_id}/v1"
     raise ValueError("must set base_url, url, or server_url+formation_id")
 
 
