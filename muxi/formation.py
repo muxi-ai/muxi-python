@@ -481,8 +481,8 @@ class FormationClient:
     def get_overlord_config(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/overlord", use_admin=True)
 
-    def get_overlord_persona(self) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/overlord/persona", use_admin=True)
+    def get_overlord_soul(self) -> Dict[str, Any]:
+        return self._transport.request_json("GET", "/overlord/soul", use_admin=True)
 
     def get_llm_settings(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/llm/settings", use_admin=True)
@@ -704,8 +704,8 @@ class AsyncFormationClient:
     async def get_overlord_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/overlord", use_admin=True)
 
-    async def get_overlord_persona(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/overlord/persona", use_admin=True)
+    async def get_overlord_soul(self) -> Dict[str, Any]:
+        return await self._transport.arequest_json("GET", "/overlord/soul", use_admin=True)
 
     async def get_llm_settings(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/llm/settings", use_admin=True)
