@@ -439,6 +439,16 @@ class FormationClient:
     def delete_scheduler_job(self, job_id: str) -> None:
         self._transport.request_json("DELETE", f"/scheduler/jobs/{job_id}", use_admin=True)
 
+    def update_scheduler_job(self, job_id: str, **kwargs) -> Dict[str, Any]:
+        body = {k: v for k, v in kwargs.items() if k in ("message", "schedule", "title")}
+        return self._transport.request_json("PUT", f"/scheduler/jobs/{job_id}", body=body, use_admin=True)
+
+    def pause_scheduler_job(self, job_id: str) -> Dict[str, Any]:
+        return self._transport.request_json("POST", f"/scheduler/jobs/{job_id}/pause", use_admin=True)
+
+    def resume_scheduler_job(self, job_id: str) -> Dict[str, Any]:
+        return self._transport.request_json("POST", f"/scheduler/jobs/{job_id}/resume", use_admin=True)
+
     # Async / logging / a2a
     def get_async_config(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/async", use_admin=True)
@@ -664,6 +674,16 @@ class AsyncFormationClient:
 
     async def delete_scheduler_job(self, job_id: str) -> None:
         await self._transport.arequest_json("DELETE", f"/scheduler/jobs/{job_id}", use_admin=True)
+
+    async def update_scheduler_job(self, job_id: str, **kwargs) -> Dict[str, Any]:
+        body = {k: v for k, v in kwargs.items() if k in ("message", "schedule", "title")}
+        return await self._transport.arequest_json("PUT", f"/scheduler/jobs/{job_id}", body=body, use_admin=True)
+
+    async def pause_scheduler_job(self, job_id: str) -> Dict[str, Any]:
+        return await self._transport.arequest_json("POST", f"/scheduler/jobs/{job_id}/pause", use_admin=True)
+
+    async def resume_scheduler_job(self, job_id: str) -> Dict[str, Any]:
+        return await self._transport.arequest_json("POST", f"/scheduler/jobs/{job_id}/resume", use_admin=True)
 
     async def get_async_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/async", use_admin=True)
