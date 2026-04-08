@@ -12,11 +12,10 @@ from typing import Any, AsyncGenerator, Dict, Generator, Iterable, Optional
 import httpx
 from urllib import parse
 
-from .errors import ConnectionError, map_error
+from .errors import ConnectionError, MuxiError, map_error
 from .transport import _unwrap_envelope
 from .version import __version__
 from .version_check import check_for_updates
-
 
 DEFAULT_TIMEOUT = 30
 
@@ -24,6 +23,7 @@ DEFAULT_TIMEOUT = 30
 @dataclass
 class FormationConfig:
     """Configuration for formation (runtime) calls."""
+
     formation_id: str | None = None
     url: str | None = None
     server_url: str | None = None
@@ -49,24 +49,37 @@ def _build_base_url(cfg: FormationConfig) -> str:
     raise ValueError("must set base_url, url, or server_url+formation_id")
 
 
+def _parse_sse_field(line: str) -> tuple[str, str]:
+    field, sep, value = line.partition(":")
+    if not sep:
+        return line, ""
+    if value.startswith(" "):
+        value = value[1:]
+    return field, value
+
+
 def _parse_sse_lines(lines: Iterable[str]):
     """Parse SSE lines into event dicts (sync iterator)."""
     event: Optional[str] = None
     data_parts: list[str] = []
     for raw in lines:
-        line = raw.rstrip("\n")
+        line = raw.rstrip("\r\n")
         if line.startswith(":"):
             continue
         if not line:
-            if data_parts:
+            if event is not None or data_parts:
                 yield {"event": event or "message", "data": "\n".join(data_parts)}
             event = None
             data_parts = []
             continue
-        if line.startswith("event:"):
-            event = line[len("event:"):].strip()
-        elif line.startswith("data:"):
-            data_parts.append(line[len("data:"):].strip())
+        field, value = _parse_sse_field(line)
+        if field == "event":
+            event = value
+        elif field == "data":
+            data_parts.append(value)
+
+    if event is not None or data_parts:
+        yield {"event": event or "message", "data": "\n".join(data_parts)}
 
 
 async def _parse_sse_lines_async(lines) -> AsyncGenerator[Dict[str, Any], None]:
@@ -74,24 +87,80 @@ async def _parse_sse_lines_async(lines) -> AsyncGenerator[Dict[str, Any], None]:
     event: Optional[str] = None
     data_parts: list[str] = []
     async for raw in lines:
-        line = raw.rstrip("\n")
+        line = raw.rstrip("\r\n")
         if line.startswith(":"):
             continue
         if not line:
-            if data_parts:
+            if event is not None or data_parts:
                 yield {"event": event or "message", "data": "\n".join(data_parts)}
             event = None
             data_parts = []
             continue
-        if line.startswith("event:"):
-            event = line[len("event:"):].strip()
-        elif line.startswith("data:"):
-            data_parts.append(line[len("data:"):].strip())
+        field, value = _parse_sse_field(line)
+        if field == "event":
+            event = value
+        elif field == "data":
+            data_parts.append(value)
+
+    if event is not None or data_parts:
+        yield {"event": event or "message", "data": "\n".join(data_parts)}
+
+
+def _sse_error_to_exception(data: str) -> MuxiError:
+    payload: Dict[str, Any] | None = None
+    try:
+        parsed = json.loads(data) if data else {}
+        if isinstance(parsed, dict):
+            payload = parsed
+    except Exception:
+        payload = None
+
+    if payload is not None:
+        code = str(
+            payload.get("type")
+            or payload.get("code")
+            or payload.get("error")
+            or "STREAM_ERROR"
+        )
+        message = str(payload.get("error") or payload.get("message") or "stream error")
+        return MuxiError(code, message, 0, payload)
+    return MuxiError(
+        "STREAM_ERROR", data or "stream error", 0, {"error": data} if data else {}
+    )
+
+
+def _normalize_chat_sse_events(
+    events: Iterable[Dict[str, Any]],
+) -> Generator[Dict[str, Any], None, None]:
+    for event in events:
+        if event.get("event") == "error":
+            raise _sse_error_to_exception(str(event.get("data", "")))
+        yield event
+
+
+async def _normalize_chat_sse_events_async(
+    events: AsyncGenerator[Dict[str, Any], None],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    async for event in events:
+        if event.get("event") == "error":
+            raise _sse_error_to_exception(str(event.get("data", "")))
+        yield event
 
 
 class _FormationTransport:
     """HTTP transport for formation API (client/admin keys, SSE)."""
-    def __init__(self, base_url: str, admin_key: Optional[str], client_key: Optional[str], timeout: int, max_retries: int, debug: bool, logger: Optional[logging.Logger], app: Optional[str] = None):
+
+    def __init__(
+        self,
+        base_url: str,
+        admin_key: Optional[str],
+        client_key: Optional[str],
+        timeout: int,
+        max_retries: int,
+        debug: bool,
+        logger: Optional[logging.Logger],
+        app: Optional[str] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.admin_key = (admin_key or "").strip()
         self.client_key = (client_key or "").strip()
@@ -109,7 +178,14 @@ class _FormationTransport:
     async def aclose(self) -> None:
         await self._aclient.aclose()
 
-    def _headers(self, *, use_admin: bool, user_id: str | None, content_type: Optional[str] = None, accept: Optional[str] = None) -> Dict[str, str]:
+    def _headers(
+        self,
+        *,
+        use_admin: bool,
+        user_id: str | None,
+        content_type: Optional[str] = None,
+        accept: Optional[str] = None,
+    ) -> Dict[str, str]:
         headers = {
             "X-Muxi-SDK": f"python/{__version__}",
             "X-Muxi-Client": f"python/{__version__}",
@@ -133,9 +209,13 @@ class _FormationTransport:
             headers["Accept"] = accept
         return headers
 
-    def _url_and_path(self, path: str, params: Optional[Dict[str, Any]]) -> tuple[str, str]:
+    def _url_and_path(
+        self, path: str, params: Optional[Dict[str, Any]]
+    ) -> tuple[str, str]:
         rel = path if path.startswith("/") else f"/{path}"
-        query = httpx.QueryParams({k: v for k, v in (params or {}).items() if v is not None})
+        query = httpx.QueryParams(
+            {k: v for k, v in (params or {}).items() if v is not None}
+        )
         full_path = f"{rel}?{query}" if query else rel
         return f"{self.base_url}{full_path}", full_path
 
@@ -146,9 +226,22 @@ class _FormationTransport:
     def _should_retry(self, status: int) -> bool:
         return status in (429, 500, 502, 503, 504)
 
-    def request_json(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None, use_admin: bool = True, user_id: str = "") -> Any:
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        body: Optional[Any] = None,
+        use_admin: bool = True,
+        user_id: str = "",
+    ) -> Any:
         url, full_path = self._url_and_path(path, params)
-        headers = self._headers(use_admin=use_admin, user_id=user_id, content_type="application/json" if body is not None else None)
+        headers = self._headers(
+            use_admin=use_admin,
+            user_id=user_id,
+            content_type="application/json" if body is not None else None,
+        )
 
         attempt = 0
         backoff = 0.5
@@ -163,7 +256,9 @@ class _FormationTransport:
                     timeout=self.timeout,
                 )
                 elapsed = time.time() - start
-                self._log(f"{method} {full_path} -> {resp.status_code} ({elapsed:.3f}s)")
+                self._log(
+                    f"{method} {full_path} -> {resp.status_code} ({elapsed:.3f}s)"
+                )
 
                 # Check for SDK updates (non-blocking, once per process)
                 check_for_updates(dict(resp.headers))
@@ -175,12 +270,27 @@ class _FormationTransport:
                         payload = resp.json()
                     except Exception:
                         payload = None
-                    code = (payload or {}).get("code") or (payload or {}).get("error") or "ERROR"
+                    code = (
+                        (payload or {}).get("code")
+                        or (payload or {}).get("error")
+                        or "ERROR"
+                    )
                     message = (payload or {}).get("message") or resp.reason_phrase
-                    err_obj = map_error(resp.status_code, code, message, payload if isinstance(payload, dict) else None, retry_after)
-                    if self._should_retry(resp.status_code) and attempt < self.max_retries:
+                    err_obj = map_error(
+                        resp.status_code,
+                        code,
+                        message,
+                        payload if isinstance(payload, dict) else None,
+                        retry_after,
+                    )
+                    if (
+                        self._should_retry(resp.status_code)
+                        and attempt < self.max_retries
+                    ):
                         sleep_for = min(backoff, 30)
-                        self._log(f"retry {method} {full_path} after {sleep_for}s due to {resp.status_code}")
+                        self._log(
+                            f"retry {method} {full_path} after {sleep_for}s due to {resp.status_code}"
+                        )
                         time.sleep(sleep_for)
                         backoff *= 2
                         attempt += 1
@@ -197,17 +307,35 @@ class _FormationTransport:
             except httpx.RequestError as url_err:
                 if attempt < self.max_retries:
                     sleep_for = min(backoff, 30)
-                    self._log(f"retry {method} {full_path} after {sleep_for}s due to connection error: {url_err}")
+                    self._log(
+                        f"retry {method} {full_path} after {sleep_for}s due to connection error: {url_err}"
+                    )
                     time.sleep(sleep_for)
                     backoff *= 2
                     attempt += 1
                     continue
                 raise ConnectionError("CONNECTION_ERROR", str(url_err), 0)
 
-    def stream_sse(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None, use_admin: bool = True, user_id: str = "") -> Generator[Dict[str, Any], None, None]:
+    def stream_sse(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        body: Optional[Any] = None,
+        use_admin: bool = True,
+        user_id: str = "",
+    ) -> Generator[Dict[str, Any], None, None]:
         url, full_path = self._url_and_path(path, params)
-        headers = self._headers(use_admin=use_admin, user_id=user_id, content_type="application/json" if body is not None else None, accept="text/event-stream")
-        resp = self._client.stream(method, url, headers=headers, json=body, timeout=None)
+        headers = self._headers(
+            use_admin=use_admin,
+            user_id=user_id,
+            content_type="application/json" if body is not None else None,
+            accept="text/event-stream",
+        )
+        resp = self._client.stream(
+            method, url, headers=headers, json=body, timeout=None
+        )
 
         def gen() -> Generator[Dict[str, Any], None, None]:
             with resp as r:
@@ -216,9 +344,22 @@ class _FormationTransport:
 
         return gen()
 
-    async def arequest_json(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None, use_admin: bool = True, user_id: str = "") -> Any:
+    async def arequest_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        body: Optional[Any] = None,
+        use_admin: bool = True,
+        user_id: str = "",
+    ) -> Any:
         url, full_path = self._url_and_path(path, params)
-        headers = self._headers(use_admin=use_admin, user_id=user_id, content_type="application/json" if body is not None else None)
+        headers = self._headers(
+            use_admin=use_admin,
+            user_id=user_id,
+            content_type="application/json" if body is not None else None,
+        )
 
         attempt = 0
         backoff = 0.5
@@ -233,7 +374,9 @@ class _FormationTransport:
                     timeout=self.timeout,
                 )
                 elapsed = time.time() - start
-                self._log(f"{method} {full_path} -> {resp.status_code} ({elapsed:.3f}s)")
+                self._log(
+                    f"{method} {full_path} -> {resp.status_code} ({elapsed:.3f}s)"
+                )
 
                 # Check for SDK updates (non-blocking, once per process)
                 check_for_updates(dict(resp.headers))
@@ -245,12 +388,27 @@ class _FormationTransport:
                         payload = resp.json()
                     except Exception:
                         payload = None
-                    code = (payload or {}).get("code") or (payload or {}).get("error") or "ERROR"
+                    code = (
+                        (payload or {}).get("code")
+                        or (payload or {}).get("error")
+                        or "ERROR"
+                    )
                     message = (payload or {}).get("message") or resp.reason_phrase
-                    err_obj = map_error(resp.status_code, code, message, payload if isinstance(payload, dict) else None, retry_after)
-                    if self._should_retry(resp.status_code) and attempt < self.max_retries:
+                    err_obj = map_error(
+                        resp.status_code,
+                        code,
+                        message,
+                        payload if isinstance(payload, dict) else None,
+                        retry_after,
+                    )
+                    if (
+                        self._should_retry(resp.status_code)
+                        and attempt < self.max_retries
+                    ):
                         sleep_for = min(backoff, 30)
-                        self._log(f"retry {method} {full_path} after {sleep_for}s due to {resp.status_code}")
+                        self._log(
+                            f"retry {method} {full_path} after {sleep_for}s due to {resp.status_code}"
+                        )
                         await self._sleep(sleep_for)
                         backoff *= 2
                         attempt += 1
@@ -267,17 +425,35 @@ class _FormationTransport:
             except httpx.RequestError as url_err:
                 if attempt < self.max_retries:
                     sleep_for = min(backoff, 30)
-                    self._log(f"retry {method} {full_path} after {sleep_for}s due to connection error: {url_err}")
+                    self._log(
+                        f"retry {method} {full_path} after {sleep_for}s due to connection error: {url_err}"
+                    )
                     await self._sleep(sleep_for)
                     backoff *= 2
                     attempt += 1
                     continue
                 raise ConnectionError("CONNECTION_ERROR", str(url_err), 0)
 
-    async def astream_sse(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, body: Optional[Any] = None, use_admin: bool = True, user_id: str = "") -> AsyncGenerator[Dict[str, Any], None]:
+    async def astream_sse(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        body: Optional[Any] = None,
+        use_admin: bool = True,
+        user_id: str = "",
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         url, full_path = self._url_and_path(path, params)
-        headers = self._headers(use_admin=use_admin, user_id=user_id, content_type="application/json" if body is not None else None, accept="text/event-stream")
-        stream = self._aclient.stream(method, url, headers=headers, json=body, timeout=None)
+        headers = self._headers(
+            use_admin=use_admin,
+            user_id=user_id,
+            content_type="application/json" if body is not None else None,
+            accept="text/event-stream",
+        )
+        stream = self._aclient.stream(
+            method, url, headers=headers, json=body, timeout=None
+        )
 
         async def agen():
             async with stream as r:
@@ -294,11 +470,21 @@ class _FormationTransport:
 
 class FormationClient:
     """Sync client for formation/runtime APIs."""
+
     def __init__(self, cfg: FormationConfig | None = None, **kwargs):
         if cfg is None:
             cfg = FormationConfig(**kwargs)
         base_url = _build_base_url(cfg)
-        self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger, cfg._app)
+        self._transport = _FormationTransport(
+            base_url,
+            cfg.admin_key,
+            cfg.client_key,
+            cfg.timeout,
+            cfg.max_retries,
+            cfg.debug,
+            cfg.logger,
+            cfg._app,
+        )
 
     def __enter__(self):
         return self
@@ -328,13 +514,17 @@ class FormationClient:
         return self._transport.request_json("GET", "/agents", use_admin=True)
 
     def get_agent(self, agent_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/agents/{agent_id}", use_admin=True)
+        return self._transport.request_json(
+            "GET", f"/agents/{agent_id}", use_admin=True
+        )
 
     def get_mcp_servers(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/mcp/servers", use_admin=True)
 
     def get_mcp_server(self, server_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/mcp/servers/{server_id}", use_admin=True)
+        return self._transport.request_json(
+            "GET", f"/mcp/servers/{server_id}", use_admin=True
+        )
 
     def get_mcp_tools(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/mcp/tools", use_admin=True)
@@ -347,50 +537,90 @@ class FormationClient:
         return self._transport.request_json("GET", f"/secrets/{key}", use_admin=True)
 
     def set_secret(self, key: str, value: str) -> None:
-        self._transport.request_json("PUT", f"/secrets/{key}", body={"value": value}, use_admin=True)
+        self._transport.request_json(
+            "PUT", f"/secrets/{key}", body={"value": value}, use_admin=True
+        )
 
     def delete_secret(self, key: str) -> None:
         self._transport.request_json("DELETE", f"/secrets/{key}", use_admin=True)
 
     # Chat (client key)
     def chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/chat", body=payload, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "POST", "/chat", body=payload, use_admin=False, user_id=user_id
+        )
 
-    def chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> Generator[Dict[str, Any], None, None]:
+    def chat_stream(
+        self, payload: Dict[str, Any], *, user_id: str = ""
+    ) -> Generator[Dict[str, Any], None, None]:
         body = dict(payload)
         body["stream"] = True
-        return self._transport.stream_sse("POST", "/chat", body=body, use_admin=False, user_id=user_id)
+        return _normalize_chat_sse_events(
+            self._transport.stream_sse(
+                "POST", "/chat", body=body, use_admin=False, user_id=user_id
+            )
+        )
 
-    def audio_chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/audiochat", body=payload, use_admin=False, user_id=user_id)
+    def audio_chat(
+        self, payload: Dict[str, Any], *, user_id: str = ""
+    ) -> Dict[str, Any]:
+        return self._transport.request_json(
+            "POST", "/audiochat", body=payload, use_admin=False, user_id=user_id
+        )
 
-    def audio_chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> Generator[Dict[str, Any], None, None]:
+    def audio_chat_stream(
+        self, payload: Dict[str, Any], *, user_id: str = ""
+    ) -> Generator[Dict[str, Any], None, None]:
         body = dict(payload)
         body["stream"] = True
-        return self._transport.stream_sse("POST", "/audiochat", body=body, use_admin=False, user_id=user_id)
+        return _normalize_chat_sse_events(
+            self._transport.stream_sse(
+                "POST", "/audiochat", body=body, use_admin=False, user_id=user_id
+            )
+        )
 
     # Sessions / requests
     def get_sessions(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
-        return self._transport.request_json("GET", "/sessions", params=params, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", "/sessions", params=params, use_admin=False, user_id=user_id
+        )
 
     def get_session(self, session_id: str, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/sessions/{session_id}", use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", f"/sessions/{session_id}", use_admin=False, user_id=user_id
+        )
 
     def get_session_messages(self, session_id: str, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/sessions/{session_id}/messages", use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", f"/sessions/{session_id}/messages", use_admin=False, user_id=user_id
+        )
 
-    def restore_session(self, session_id: str, user_id: str, messages: list[Dict[str, Any]]) -> None:
-        self._transport.request_json("POST", f"/sessions/{session_id}/restore", body={"messages": messages}, use_admin=False, user_id=user_id)
+    def restore_session(
+        self, session_id: str, user_id: str, messages: list[Dict[str, Any]]
+    ) -> None:
+        self._transport.request_json(
+            "POST",
+            f"/sessions/{session_id}/restore",
+            body={"messages": messages},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     def get_requests(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/requests", use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", "/requests", use_admin=False, user_id=user_id
+        )
 
     def get_request_status(self, request_id: str, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/requests/{request_id}", use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", f"/requests/{request_id}", use_admin=False, user_id=user_id
+        )
 
     def cancel_request(self, request_id: str, user_id: str) -> None:
-        self._transport.request_json("DELETE", f"/requests/{request_id}", use_admin=False, user_id=user_id)
+        self._transport.request_json(
+            "DELETE", f"/requests/{request_id}", use_admin=False, user_id=user_id
+        )
 
     # Memory
     def get_memory_config(self) -> Dict[str, Any]:
@@ -398,22 +628,54 @@ class FormationClient:
 
     def get_memories(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
-        return self._transport.request_json("GET", "/memories", params=params, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", "/memories", params=params, use_admin=False, user_id=user_id
+        )
 
     def add_memory(self, user_id: str, mem_type: str, detail: str) -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/memories", body={"user_id": user_id, "type": mem_type, "detail": detail}, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "POST",
+            "/memories",
+            body={"user_id": user_id, "type": mem_type, "detail": detail},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     def delete_memory(self, user_id: str, memory_id: str) -> None:
-        self._transport.request_json("DELETE", f"/memories/{memory_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        self._transport.request_json(
+            "DELETE",
+            f"/memories/{memory_id}",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     def get_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET",
+            "/memory/buffer",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     def clear_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("DELETE", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "DELETE",
+            "/memory/buffer",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     def clear_session_buffer(self, user_id: str, session_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("DELETE", f"/memory/buffer/{session_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "DELETE",
+            f"/memory/buffer/{session_id}",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     def clear_all_buffers(self) -> Dict[str, Any]:
         return self._transport.request_json("DELETE", "/memory/buffer", use_admin=True)
@@ -427,27 +689,50 @@ class FormationClient:
 
     def get_scheduler_jobs(self, user_id: str) -> Dict[str, Any]:
         params = {"user_id": user_id}
-        return self._transport.request_json("GET", "/scheduler/jobs", params=params, use_admin=True)
+        return self._transport.request_json(
+            "GET", "/scheduler/jobs", params=params, use_admin=True
+        )
 
     def get_scheduler_job(self, job_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/scheduler/jobs/{job_id}", use_admin=True)
+        return self._transport.request_json(
+            "GET", f"/scheduler/jobs/{job_id}", use_admin=True
+        )
 
-    def create_scheduler_job(self, job_type: str, schedule: str, message: str, user_id: str) -> Dict[str, Any]:
-        body = {"type": job_type, "schedule": schedule, "message": message, "user_id": user_id}
-        return self._transport.request_json("POST", "/scheduler/jobs", body=body, use_admin=True)
+    def create_scheduler_job(
+        self, job_type: str, schedule: str, message: str, user_id: str
+    ) -> Dict[str, Any]:
+        body = {
+            "type": job_type,
+            "schedule": schedule,
+            "message": message,
+            "user_id": user_id,
+        }
+        return self._transport.request_json(
+            "POST", "/scheduler/jobs", body=body, use_admin=True
+        )
 
     def delete_scheduler_job(self, job_id: str) -> None:
-        self._transport.request_json("DELETE", f"/scheduler/jobs/{job_id}", use_admin=True)
+        self._transport.request_json(
+            "DELETE", f"/scheduler/jobs/{job_id}", use_admin=True
+        )
 
     def update_scheduler_job(self, job_id: str, **kwargs) -> Dict[str, Any]:
-        body = {k: v for k, v in kwargs.items() if k in ("message", "schedule", "title")}
-        return self._transport.request_json("PUT", f"/scheduler/jobs/{job_id}", body=body, use_admin=True)
+        body = {
+            k: v for k, v in kwargs.items() if k in ("message", "schedule", "title")
+        }
+        return self._transport.request_json(
+            "PUT", f"/scheduler/jobs/{job_id}", body=body, use_admin=True
+        )
 
     def pause_scheduler_job(self, job_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("POST", f"/scheduler/jobs/{job_id}/pause", use_admin=True)
+        return self._transport.request_json(
+            "POST", f"/scheduler/jobs/{job_id}/pause", use_admin=True
+        )
 
     def resume_scheduler_job(self, job_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("POST", f"/scheduler/jobs/{job_id}/resume", use_admin=True)
+        return self._transport.request_json(
+            "POST", f"/scheduler/jobs/{job_id}/resume", use_admin=True
+        )
 
     # Async / logging / a2a
     def get_async_config(self) -> Dict[str, Any]:
@@ -460,32 +745,57 @@ class FormationClient:
         return self._transport.request_json("GET", "/logging", use_admin=True)
 
     def get_logging_destinations(self) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/logging/destinations", use_admin=True)
+        return self._transport.request_json(
+            "GET", "/logging/destinations", use_admin=True
+        )
 
     # Credentials / identifiers
     def list_credential_services(self) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/credentials/services", use_admin=True)
+        return self._transport.request_json(
+            "GET", "/credentials/services", use_admin=True
+        )
 
     def list_credentials(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", "/credentials", use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", "/credentials", use_admin=False, user_id=user_id
+        )
 
     def get_credential(self, credential_id: str, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/credentials/{credential_id}", use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "GET", f"/credentials/{credential_id}", use_admin=False, user_id=user_id
+        )
 
-    def create_credential(self, user_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/credentials", body=payload, use_admin=False, user_id=user_id)
+    def create_credential(
+        self, user_id: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return self._transport.request_json(
+            "POST", "/credentials", body=payload, use_admin=False, user_id=user_id
+        )
 
     def delete_credential(self, credential_id: str, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("DELETE", f"/credentials/{credential_id}", use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "DELETE", f"/credentials/{credential_id}", use_admin=False, user_id=user_id
+        )
 
     def get_user_identifiers_for_user(self, user_id: str) -> Dict[str, Any]:
-        return self._transport.request_json("GET", f"/users/identifiers/{user_id}", use_admin=True)
+        return self._transport.request_json(
+            "GET", f"/users/identifiers/{user_id}", use_admin=True
+        )
 
-    def link_user_identifier(self, muxi_user_id: str, identifiers: list[Any]) -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/users/identifiers", body={"muxi_user_id": muxi_user_id, "identifiers": identifiers}, use_admin=True)
+    def link_user_identifier(
+        self, muxi_user_id: str, identifiers: list[Any]
+    ) -> Dict[str, Any]:
+        return self._transport.request_json(
+            "POST",
+            "/users/identifiers",
+            body={"muxi_user_id": muxi_user_id, "identifiers": identifiers},
+            use_admin=True,
+        )
 
     def unlink_user_identifier(self, identifier: str) -> None:
-        self._transport.request_json("DELETE", f"/users/identifiers/{identifier}", use_admin=True)
+        self._transport.request_json(
+            "DELETE", f"/users/identifiers/{identifier}", use_admin=True
+        )
 
     # Overlord / LLM
     def get_overlord_config(self) -> Dict[str, Any]:
@@ -504,9 +814,18 @@ class FormationClient:
     def get_trigger(self, name: str) -> Dict[str, Any]:
         return self._transport.request_json("GET", f"/triggers/{name}", use_admin=False)
 
-    def fire_trigger(self, name: str, data: Any, *, async_mode: bool = False, user_id: str = "") -> Dict[str, Any]:
+    def fire_trigger(
+        self, name: str, data: Any, *, async_mode: bool = False, user_id: str = ""
+    ) -> Dict[str, Any]:
         params = {"async": str(async_mode).lower()}
-        return self._transport.request_json("POST", f"/triggers/{name}", params=params, body=data, use_admin=False, user_id=user_id)
+        return self._transport.request_json(
+            "POST",
+            f"/triggers/{name}",
+            params=params,
+            body=data,
+            use_admin=False,
+            user_id=user_id,
+        )
 
     def get_sops(self) -> Dict[str, Any]:
         return self._transport.request_json("GET", "/sops", use_admin=False)
@@ -518,30 +837,66 @@ class FormationClient:
         return self._transport.request_json("GET", "/audit", use_admin=True)
 
     def clear_audit_log(self) -> None:
-        self._transport.request_json("DELETE", "/audit?confirm=clear-audit-log", use_admin=True)
+        self._transport.request_json(
+            "DELETE", "/audit?confirm=clear-audit-log", use_admin=True
+        )
 
     # Events / logs streaming
     def stream_events(self, user_id: str) -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("GET", "/events", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        return self._transport.stream_sse(
+            "GET",
+            "/events",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
-    def stream_request(self, user_id: str, session_id: str, request_id: str) -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("GET", f"/events/{session_id}/{request_id}", use_admin=False, user_id=user_id)
+    def stream_request(
+        self, user_id: str, session_id: str, request_id: str
+    ) -> Generator[Dict[str, Any], None, None]:
+        return self._transport.stream_sse(
+            "GET",
+            f"/events/{session_id}/{request_id}",
+            use_admin=False,
+            user_id=user_id,
+        )
 
-    def stream_logs(self, filters: Optional[Dict[str, Any]] = None) -> Generator[Dict[str, Any], None, None]:
-        return self._transport.stream_sse("GET", "/logs", params=filters, use_admin=True)
+    def stream_logs(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> Generator[Dict[str, Any], None, None]:
+        return self._transport.stream_sse(
+            "GET", "/logs", params=filters, use_admin=True
+        )
 
     # Resolve user
-    def resolve_user(self, identifier: str, create_user: bool = False) -> Dict[str, Any]:
-        return self._transport.request_json("POST", "/users/resolve", body={"identifier": identifier, "create_user": create_user}, use_admin=False)
+    def resolve_user(
+        self, identifier: str, create_user: bool = False
+    ) -> Dict[str, Any]:
+        return self._transport.request_json(
+            "POST",
+            "/users/resolve",
+            body={"identifier": identifier, "create_user": create_user},
+            use_admin=False,
+        )
 
 
 class AsyncFormationClient:
     """Async client for formation/runtime APIs."""
+
     def __init__(self, cfg: FormationConfig | None = None, **kwargs):
         if cfg is None:
             cfg = FormationConfig(**kwargs)
         base_url = _build_base_url(cfg)
-        self._transport = _FormationTransport(base_url, cfg.admin_key, cfg.client_key, cfg.timeout, cfg.max_retries, cfg.debug, cfg.logger, cfg._app)
+        self._transport = _FormationTransport(
+            base_url,
+            cfg.admin_key,
+            cfg.client_key,
+            cfg.timeout,
+            cfg.max_retries,
+            cfg.debug,
+            cfg.logger,
+            cfg._app,
+        )
 
     async def __aenter__(self):
         return self
@@ -569,13 +924,19 @@ class AsyncFormationClient:
         return await self._transport.arequest_json("GET", "/agents", use_admin=True)
 
     async def get_agent(self, agent_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/agents/{agent_id}", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", f"/agents/{agent_id}", use_admin=True
+        )
 
     async def get_mcp_servers(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/mcp/servers", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", "/mcp/servers", use_admin=True
+        )
 
     async def get_mcp_server(self, server_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/mcp/servers/{server_id}", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", f"/mcp/servers/{server_id}", use_admin=True
+        )
 
     async def get_mcp_tools(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/mcp/tools", use_admin=True)
@@ -584,106 +945,219 @@ class AsyncFormationClient:
         return await self._transport.arequest_json("GET", "/secrets", use_admin=True)
 
     async def get_secret(self, key: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/secrets/{key}", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", f"/secrets/{key}", use_admin=True
+        )
 
     async def set_secret(self, key: str, value: str) -> None:
-        await self._transport.arequest_json("PUT", f"/secrets/{key}", body={"value": value}, use_admin=True)
+        await self._transport.arequest_json(
+            "PUT", f"/secrets/{key}", body={"value": value}, use_admin=True
+        )
 
     async def delete_secret(self, key: str) -> None:
         await self._transport.arequest_json("DELETE", f"/secrets/{key}", use_admin=True)
 
-    async def chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/chat", body=payload, use_admin=False, user_id=user_id)
+    async def chat(
+        self, payload: Dict[str, Any], *, user_id: str = ""
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "POST", "/chat", body=payload, use_admin=False, user_id=user_id
+        )
 
-    async def chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> AsyncGenerator[Dict[str, Any], None]:
+    async def chat_stream(
+        self, payload: Dict[str, Any], *, user_id: str = ""
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         body = dict(payload)
         body["stream"] = True
-        return await self._transport.astream_sse("POST", "/chat", body=body, use_admin=False, user_id=user_id)
+        return _normalize_chat_sse_events_async(
+            await self._transport.astream_sse(
+                "POST", "/chat", body=body, use_admin=False, user_id=user_id
+            )
+        )
 
-    async def audio_chat(self, payload: Dict[str, Any], *, user_id: str = "") -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/audiochat", body=payload, use_admin=False, user_id=user_id)
+    async def audio_chat(
+        self, payload: Dict[str, Any], *, user_id: str = ""
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "POST", "/audiochat", body=payload, use_admin=False, user_id=user_id
+        )
 
-    async def audio_chat_stream(self, payload: Dict[str, Any], *, user_id: str = "") -> AsyncGenerator[Dict[str, Any], None]:
+    async def audio_chat_stream(
+        self, payload: Dict[str, Any], *, user_id: str = ""
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         body = dict(payload)
         body["stream"] = True
-        return await self._transport.astream_sse("POST", "/audiochat", body=body, use_admin=False, user_id=user_id)
+        return _normalize_chat_sse_events_async(
+            await self._transport.astream_sse(
+                "POST", "/audiochat", body=body, use_admin=False, user_id=user_id
+            )
+        )
 
-    async def get_sessions(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
+    async def get_sessions(
+        self, user_id: str, limit: Optional[int] = None
+    ) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
-        return await self._transport.arequest_json("GET", "/sessions", params=params, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET", "/sessions", params=params, use_admin=False, user_id=user_id
+        )
 
     async def get_session(self, session_id: str, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/sessions/{session_id}", use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET", f"/sessions/{session_id}", use_admin=False, user_id=user_id
+        )
 
-    async def get_session_messages(self, session_id: str, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/sessions/{session_id}/messages", use_admin=False, user_id=user_id)
+    async def get_session_messages(
+        self, session_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "GET", f"/sessions/{session_id}/messages", use_admin=False, user_id=user_id
+        )
 
-    async def restore_session(self, session_id: str, user_id: str, messages: list[Dict[str, Any]]) -> None:
-        await self._transport.arequest_json("POST", f"/sessions/{session_id}/restore", body={"messages": messages}, use_admin=False, user_id=user_id)
+    async def restore_session(
+        self, session_id: str, user_id: str, messages: list[Dict[str, Any]]
+    ) -> None:
+        await self._transport.arequest_json(
+            "POST",
+            f"/sessions/{session_id}/restore",
+            body={"messages": messages},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     async def get_requests(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/requests", use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET", "/requests", use_admin=False, user_id=user_id
+        )
 
     async def get_request_status(self, request_id: str, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/requests/{request_id}", use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET", f"/requests/{request_id}", use_admin=False, user_id=user_id
+        )
 
     async def cancel_request(self, request_id: str, user_id: str) -> None:
-        await self._transport.arequest_json("DELETE", f"/requests/{request_id}", use_admin=False, user_id=user_id)
+        await self._transport.arequest_json(
+            "DELETE", f"/requests/{request_id}", use_admin=False, user_id=user_id
+        )
 
     async def get_memory_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/memory", use_admin=True)
 
-    async def get_memories(self, user_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
+    async def get_memories(
+        self, user_id: str, limit: Optional[int] = None
+    ) -> Dict[str, Any]:
         params = {"user_id": user_id, "limit": limit}
-        return await self._transport.arequest_json("GET", "/memories", params=params, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET", "/memories", params=params, use_admin=False, user_id=user_id
+        )
 
-    async def add_memory(self, user_id: str, mem_type: str, detail: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/memories", body={"user_id": user_id, "type": mem_type, "detail": detail}, use_admin=False, user_id=user_id)
+    async def add_memory(
+        self, user_id: str, mem_type: str, detail: str
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "POST",
+            "/memories",
+            body={"user_id": user_id, "type": mem_type, "detail": detail},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     async def delete_memory(self, user_id: str, memory_id: str) -> None:
-        await self._transport.arequest_json("DELETE", f"/memories/{memory_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        await self._transport.arequest_json(
+            "DELETE",
+            f"/memories/{memory_id}",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     async def get_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET",
+            "/memory/buffer",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     async def clear_user_buffer(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("DELETE", "/memory/buffer", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "DELETE",
+            "/memory/buffer",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
-    async def clear_session_buffer(self, user_id: str, session_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("DELETE", f"/memory/buffer/{session_id}", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+    async def clear_session_buffer(
+        self, user_id: str, session_id: str
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "DELETE",
+            f"/memory/buffer/{session_id}",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
     async def clear_all_buffers(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("DELETE", "/memory/buffer", use_admin=True)
+        return await self._transport.arequest_json(
+            "DELETE", "/memory/buffer", use_admin=True
+        )
 
     async def get_buffer_stats(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/memory/stats", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", "/memory/stats", use_admin=True
+        )
 
     async def get_scheduler_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/scheduler", use_admin=True)
 
     async def get_scheduler_jobs(self, user_id: str) -> Dict[str, Any]:
         params = {"user_id": user_id}
-        return await self._transport.arequest_json("GET", "/scheduler/jobs", params=params, use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", "/scheduler/jobs", params=params, use_admin=True
+        )
 
     async def get_scheduler_job(self, job_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/scheduler/jobs/{job_id}", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", f"/scheduler/jobs/{job_id}", use_admin=True
+        )
 
-    async def create_scheduler_job(self, job_type: str, schedule: str, message: str, user_id: str) -> Dict[str, Any]:
-        body = {"type": job_type, "schedule": schedule, "message": message, "user_id": user_id}
-        return await self._transport.arequest_json("POST", "/scheduler/jobs", body=body, use_admin=True)
+    async def create_scheduler_job(
+        self, job_type: str, schedule: str, message: str, user_id: str
+    ) -> Dict[str, Any]:
+        body = {
+            "type": job_type,
+            "schedule": schedule,
+            "message": message,
+            "user_id": user_id,
+        }
+        return await self._transport.arequest_json(
+            "POST", "/scheduler/jobs", body=body, use_admin=True
+        )
 
     async def delete_scheduler_job(self, job_id: str) -> None:
-        await self._transport.arequest_json("DELETE", f"/scheduler/jobs/{job_id}", use_admin=True)
+        await self._transport.arequest_json(
+            "DELETE", f"/scheduler/jobs/{job_id}", use_admin=True
+        )
 
     async def update_scheduler_job(self, job_id: str, **kwargs) -> Dict[str, Any]:
-        body = {k: v for k, v in kwargs.items() if k in ("message", "schedule", "title")}
-        return await self._transport.arequest_json("PUT", f"/scheduler/jobs/{job_id}", body=body, use_admin=True)
+        body = {
+            k: v for k, v in kwargs.items() if k in ("message", "schedule", "title")
+        }
+        return await self._transport.arequest_json(
+            "PUT", f"/scheduler/jobs/{job_id}", body=body, use_admin=True
+        )
 
     async def pause_scheduler_job(self, job_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", f"/scheduler/jobs/{job_id}/pause", use_admin=True)
+        return await self._transport.arequest_json(
+            "POST", f"/scheduler/jobs/{job_id}/pause", use_admin=True
+        )
 
     async def resume_scheduler_job(self, job_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", f"/scheduler/jobs/{job_id}/resume", use_admin=True)
+        return await self._transport.arequest_json(
+            "POST", f"/scheduler/jobs/{job_id}/resume", use_admin=True
+        )
 
     async def get_async_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/async", use_admin=True)
@@ -695,71 +1169,141 @@ class AsyncFormationClient:
         return await self._transport.arequest_json("GET", "/logging", use_admin=True)
 
     async def get_logging_destinations(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/logging/destinations", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", "/logging/destinations", use_admin=True
+        )
 
     async def list_credential_services(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/credentials/services", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", "/credentials/services", use_admin=True
+        )
 
     async def list_credentials(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/credentials", use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET", "/credentials", use_admin=False, user_id=user_id
+        )
 
     async def get_credential(self, credential_id: str, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/credentials/{credential_id}", use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "GET", f"/credentials/{credential_id}", use_admin=False, user_id=user_id
+        )
 
-    async def create_credential(self, user_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/credentials", body=payload, use_admin=False, user_id=user_id)
+    async def create_credential(
+        self, user_id: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "POST", "/credentials", body=payload, use_admin=False, user_id=user_id
+        )
 
-    async def delete_credential(self, credential_id: str, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("DELETE", f"/credentials/{credential_id}", use_admin=False, user_id=user_id)
+    async def delete_credential(
+        self, credential_id: str, user_id: str
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "DELETE", f"/credentials/{credential_id}", use_admin=False, user_id=user_id
+        )
 
     async def get_user_identifiers_for_user(self, user_id: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/users/identifiers/{user_id}", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", f"/users/identifiers/{user_id}", use_admin=True
+        )
 
-    async def link_user_identifier(self, muxi_user_id: str, identifiers: list[Any]) -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/users/identifiers", body={"muxi_user_id": muxi_user_id, "identifiers": identifiers}, use_admin=True)
+    async def link_user_identifier(
+        self, muxi_user_id: str, identifiers: list[Any]
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "POST",
+            "/users/identifiers",
+            body={"muxi_user_id": muxi_user_id, "identifiers": identifiers},
+            use_admin=True,
+        )
 
     async def unlink_user_identifier(self, identifier: str) -> None:
-        await self._transport.arequest_json("DELETE", f"/users/identifiers/{identifier}", use_admin=True)
+        await self._transport.arequest_json(
+            "DELETE", f"/users/identifiers/{identifier}", use_admin=True
+        )
 
     async def get_overlord_config(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/overlord", use_admin=True)
 
     async def get_overlord_soul(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/overlord/soul", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", "/overlord/soul", use_admin=True
+        )
 
     async def get_llm_settings(self) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", "/llm/settings", use_admin=True)
+        return await self._transport.arequest_json(
+            "GET", "/llm/settings", use_admin=True
+        )
 
     async def get_triggers(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/triggers", use_admin=False)
 
     async def get_trigger(self, name: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/triggers/{name}", use_admin=False)
+        return await self._transport.arequest_json(
+            "GET", f"/triggers/{name}", use_admin=False
+        )
 
-    async def fire_trigger(self, name: str, data: Any, *, async_mode: bool = False, user_id: str = "") -> Dict[str, Any]:
+    async def fire_trigger(
+        self, name: str, data: Any, *, async_mode: bool = False, user_id: str = ""
+    ) -> Dict[str, Any]:
         params = {"async": str(async_mode).lower()}
-        return await self._transport.arequest_json("POST", f"/triggers/{name}", params=params, body=data, use_admin=False, user_id=user_id)
+        return await self._transport.arequest_json(
+            "POST",
+            f"/triggers/{name}",
+            params=params,
+            body=data,
+            use_admin=False,
+            user_id=user_id,
+        )
 
     async def get_sops(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/sops", use_admin=False)
 
     async def get_sop(self, name: str) -> Dict[str, Any]:
-        return await self._transport.arequest_json("GET", f"/sops/{name}", use_admin=False)
+        return await self._transport.arequest_json(
+            "GET", f"/sops/{name}", use_admin=False
+        )
 
     async def get_audit_log(self) -> Dict[str, Any]:
         return await self._transport.arequest_json("GET", "/audit", use_admin=True)
 
     async def clear_audit_log(self) -> None:
-        await self._transport.arequest_json("DELETE", "/audit?confirm=clear-audit-log", use_admin=True)
+        await self._transport.arequest_json(
+            "DELETE", "/audit?confirm=clear-audit-log", use_admin=True
+        )
 
     async def stream_events(self, user_id: str) -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("GET", "/events", params={"user_id": user_id}, use_admin=False, user_id=user_id)
+        return await self._transport.astream_sse(
+            "GET",
+            "/events",
+            params={"user_id": user_id},
+            use_admin=False,
+            user_id=user_id,
+        )
 
-    async def stream_request(self, user_id: str, session_id: str, request_id: str) -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("GET", f"/events/{session_id}/{request_id}", use_admin=False, user_id=user_id)
+    async def stream_request(
+        self, user_id: str, session_id: str, request_id: str
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        return await self._transport.astream_sse(
+            "GET",
+            f"/events/{session_id}/{request_id}",
+            use_admin=False,
+            user_id=user_id,
+        )
 
-    async def stream_logs(self, filters: Optional[Dict[str, Any]] = None) -> AsyncGenerator[Dict[str, Any], None]:
-        return await self._transport.astream_sse("GET", "/logs", params=filters, use_admin=True)
+    async def stream_logs(
+        self, filters: Optional[Dict[str, Any]] = None
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        return await self._transport.astream_sse(
+            "GET", "/logs", params=filters, use_admin=True
+        )
 
-    async def resolve_user(self, identifier: str, create_user: bool = False) -> Dict[str, Any]:
-        return await self._transport.arequest_json("POST", "/users/resolve", body={"identifier": identifier, "create_user": create_user}, use_admin=False)
+    async def resolve_user(
+        self, identifier: str, create_user: bool = False
+    ) -> Dict[str, Any]:
+        return await self._transport.arequest_json(
+            "POST",
+            "/users/resolve",
+            body={"identifier": identifier, "create_user": create_user},
+            use_admin=False,
+        )
