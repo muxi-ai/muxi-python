@@ -20,7 +20,7 @@ jobs:
     env:
       MUXI_SDK_E2E_SERVER_URL: ${{ secrets.MUXI_SDK_E2E_SERVER_URL }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
         with:
           fetch-depth: 0
 
@@ -67,7 +67,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
         with:
           fetch-depth: 0
           token: ${{ secrets.MUXI_RELEASE_TOKEN }}
@@ -158,7 +158,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
         with:
           ref: develop
           fetch-depth: 0
@@ -180,7 +180,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout parent sdks repo
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
         with:
           repository: muxi-ai/sdks
           ref: main
