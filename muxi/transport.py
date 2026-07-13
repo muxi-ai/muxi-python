@@ -34,12 +34,15 @@ def _unwrap_envelope(obj: Any) -> Any:
         return obj
     req = obj.get("request") or {}
     request_id = req.get("id") or obj.get("request_id")
+    idempotency_key = req.get("idempotency_key")
     ts = obj.get("timestamp")
     data = obj.get("data")
     if isinstance(data, dict):
         out = dict(data)
         if request_id:
             out.setdefault("request_id", request_id)
+        if idempotency_key:
+            out.setdefault("idempotency_key", idempotency_key)
         if ts is not None:
             out.setdefault("timestamp", ts)
         return out

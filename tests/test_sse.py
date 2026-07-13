@@ -5,6 +5,7 @@ from muxi.formation import (
     _normalize_chat_sse_events,
     _parse_sse_lines,
     _parse_sse_lines_async,
+    parse_ui_widgets,
 )
 
 
@@ -41,6 +42,28 @@ class TestSSEParsing(unittest.TestCase):
         ]
         events = list(_parse_sse_lines(lines))
         self.assertEqual(events, [{"event": "message", "data": "hello"}])
+
+    def test_parse_ui_widgets_from_ui_frame(self):
+        lines = [
+            "event: ui\n",
+            'data: {"ui":[{"type":"options","id":"w1","prompt":"Which?",'
+            '"options":[{"value":"us","label":"United States"}]},'
+            '{"type":"action_link","id":"w2","label":"Dash","url":"https://x.io"}]}\n',
+            "\n",
+        ]
+        events = list(_parse_sse_lines(lines))
+        self.assertEqual(len(events), 1)
+
+        widgets = parse_ui_widgets(events[0])
+        self.assertEqual(len(widgets), 2)
+        self.assertEqual(widgets[0]["type"], "options")
+        self.assertEqual(widgets[0]["options"][0]["label"], "United States")
+        self.assertEqual(widgets[1]["url"], "https://x.io")
+
+    def test_parse_ui_widgets_ignores_other_frames(self):
+        self.assertEqual(parse_ui_widgets({"event": "message", "data": "hi"}), [])
+        self.assertEqual(parse_ui_widgets({"event": "ui", "data": "not json"}), [])
+        self.assertEqual(parse_ui_widgets({"event": "ui", "data": '{"ui":{}}'}), [])
 
     def test_chat_stream_error_is_surfaced(self):
         with self.assertRaises(MuxiError) as ctx:

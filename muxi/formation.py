@@ -129,6 +129,24 @@ def _sse_error_to_exception(data: str) -> MuxiError:
     )
 
 
+def parse_ui_widgets(event: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Widgets from an ``event: ui`` stream frame; ``[]`` for other frames.
+
+    The runtime delivers the response envelope's optional ``ui`` array
+    (options, action_link, mcp_resource widgets) as a single ``event: ui``
+    SSE frame before ``event: done``. Unknown widget types should be
+    ignored (progressive enhancement).
+    """
+    if event.get("event") != "ui":
+        return []
+    try:
+        parsed = json.loads(str(event.get("data", "")) or "{}")
+    except Exception:
+        return []
+    ui = parsed.get("ui") if isinstance(parsed, dict) else None
+    return ui if isinstance(ui, list) else []
+
+
 def _normalize_chat_sse_events(
     events: Iterable[Dict[str, Any]],
 ) -> Generator[Dict[str, Any], None, None]:
